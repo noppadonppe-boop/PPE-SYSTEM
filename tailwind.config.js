@@ -6,6 +6,9 @@ export default {
   ],
   theme: {
     extend: {
+      fontFamily: {
+        sarabun: ['Sarabun', 'sans-serif'],
+      },
       colors: {
         navy: {
           50:  '#f0f4ff',
