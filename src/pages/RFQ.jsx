@@ -3,8 +3,9 @@ import {
   Plus, Eye, Search, Trash2, CheckCircle, XCircle, ArrowRight,
   Calculator, Users, DollarSign, ClipboardList, FileText,
   ChevronRight, InboxIcon, ClipboardCheck, BadgeCheck,
-  Pencil, Link2, Upload, Image, MessageSquare,
+  Pencil, Link2, Upload, Image, MessageSquare, Download, FileUp, Save,
 } from 'lucide-react'
+import * as XLSX from 'xlsx'
 import { useApp } from '../context/AppContext'
 import Modal from '../components/ui/Modal'
 import ConfirmDialog from '../components/ui/ConfirmDialog'
@@ -497,15 +498,39 @@ function genMheNo(rfq) {
 
 const EMPTY_MHE_ROW = { activityName: '', type: 'Drawing', additionalInfo: '', qty: '', unitMH: '', assignEngineer: '', note: '' }
 
-function Stage2Form({ rfq, onSave, onClose }) {
+function Stage2Form({ rfq, onSave, onSaveDraft, onClose }) {
   const { teamRates } = useApp()
   const [mheNo]        = useState(rfq.mheNo || genMheNo(rfq))
+  const [dateStart,      setDateStart]      = useState(rfq.dateStart      || '')
   const [dateCompletion, setDateCompletion] = useState(rfq.dateCompletion || '')
-  const [rows, setRows] = useState(
-    rfq.mheRows && rfq.mheRows.length > 0
+  const [rows, setRows] = useState(() => {
+    const src = rfq.mheRows && rfq.mheRows.length > 0
       ? rfq.mheRows
       : [{ ...EMPTY_MHE_ROW, id: `mhe-${Date.now()}` }]
-  )
+    // Ensure every row has a unique id (old Firestore docs may lack one)
+    return src.map((r, i) => r.id ? r : { ...r, id: `mhe-norm-${Date.now()}-${i}` })
+  })
+  const [draftSaved, setDraftSaved] = useState(false)
+  const [editingId, setEditingId] = useState(null) // row id currently being edited
+  const [editBuf, setEditBuf]     = useState({})    // buffer for edit-in-progress values
+  const importRef = useRef()
+
+  const startEdit = (row) => {
+    setEditingId(row.id)
+    setEditBuf({ ...row })
+  }
+  const cancelEdit = () => { setEditingId(null); setEditBuf({}) }
+  const saveEdit = () => {
+    const q = parseFloat(editBuf.qty)    || 0
+    const u = parseFloat(editBuf.unitMH) || 0
+    setRows(prev => prev.map(r => r.id === editingId
+      ? { ...editBuf, qty: editBuf.qty, unitMH: editBuf.unitMH, totalMH: +(q * u).toFixed(2) }
+      : r
+    ))
+    setEditingId(null)
+    setEditBuf({})
+  }
+  const setBuf = (field, val) => setEditBuf(p => ({ ...p, [field]: val }))
 
   const addRow = () => setRows(prev => [...prev, { ...EMPTY_MHE_ROW, id: `mhe-${Date.now()}` }])
   const removeRow = (id) => setRows(prev => prev.filter(r => r.id !== id))
@@ -521,10 +546,82 @@ function Stage2Form({ rfq, onSave, onClose }) {
   }))
 
   const totalMH = rows.reduce((s, r) => s + (r.totalMH || 0), 0)
-
   const engOptions = teamRates.map(e => e.name)
-
   const canSubmit = rows.some(r => r.activityName.trim()) && dateCompletion
+
+  // ── Excel helpers ────────────────────────────────────────────────────────
+  const downloadTemplate = () => {
+    const headers = [['Activity Name','Type','Additional Info','Qty','Unit MH','Assign Engineer','Note']]
+    const sample  = [['Foundation Drawing','Drawing','Level B1',1,10,'','']]
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([...headers, ...sample]), 'MHE')
+    XLSX.writeFile(wb, `MHE-Template-${rfq.requestWorkNo}.xlsx`)
+  }
+
+  const importFromExcel = (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      const wb   = XLSX.read(ev.target.result, { type: 'binary' })
+      const ws   = wb.Sheets[wb.SheetNames[0]]
+      const data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
+      // skip header row (row 0)
+      const imported = data.slice(1).filter(r => r[0]).map((r, i) => {
+        const q = parseFloat(r[3]) || 0
+        const u = parseFloat(r[4]) || 0
+        return {
+          id:             `mhe-imp-${Date.now()}-${i}`,
+          activityName:  String(r[0] || '').trim(),
+          type:          MHE_TYPES.includes(String(r[1]).trim()) ? String(r[1]).trim() : MHE_TYPES[0],
+          additionalInfo:String(r[2] || '').trim(),
+          qty:           q || '',
+          unitMH:        u || '',
+          totalMH:       +(q * u).toFixed(2),
+          assignEngineer:String(r[5] || '').trim(),
+          note:          String(r[6] || '').trim(),
+        }
+      })
+      if (imported.length > 0) setRows(imported)
+    }
+    reader.readAsBinaryString(file)
+    e.target.value = ''
+  }
+
+  const exportToExcel = () => {
+    const wsData = [
+      ['#','Activity Name','Type','Additional Info','Qty','Unit MH','Total MH','Assign Engineer','Note'],
+      ...rows.map((r, i) => [
+        i + 1, r.activityName, r.type, r.additionalInfo,
+        parseFloat(r.qty)||0, parseFloat(r.unitMH)||0, r.totalMH||0,
+        r.assignEngineer, r.note,
+      ]),
+      ['','','','','','Total MH:', totalMH.toFixed(2),'','']
+    ]
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(wsData), 'MHE')
+    XLSX.writeFile(wb, `MHE-${mheNo}-${rfq.requestWorkNo}.xlsx`)
+  }
+
+  const buildPayload = (targetStatus) => ({
+    mheNo, dateStart, dateCompletion, mheRows: rows,
+    wbsItems: rows.map(r => ({ id: r.id, task: r.activityName, unit: 'activity', qty: parseFloat(r.qty)||0, unitMH: parseFloat(r.unitMH)||0, totalMH: r.totalMH||0, type: r.type, additionalInfo: r.additionalInfo, assignEngineer: r.assignEngineer, note: r.note })),
+    assignedEngineers: [...new Set(rows.filter(r => r.assignEngineer).map(r => teamRates.find(t => t.name === r.assignEngineer)?.id).filter(Boolean))],
+    totalPlannedMH: +totalMH.toFixed(2),
+    status: targetStatus,
+  })
+
+  const handleSaveDraft = () => {
+    if (onSaveDraft) {
+      // Save ONLY the MHE data — never change the workflow status
+      const { mheNo: mn, dateStart: ds, dateCompletion: dc, mheRows: mr,
+              wbsItems: wi, assignedEngineers: ae, totalPlannedMH: tp } = buildPayload(rfq.status)
+      onSaveDraft({ mheNo: mn, dateStart: ds, dateCompletion: dc,
+                    mheRows: mr, wbsItems: wi, assignedEngineers: ae, totalPlannedMH: tp })
+      setDraftSaved(true)
+      setTimeout(() => setDraftSaved(false), 2500)
+    }
+  }
 
   return (
     <div className="px-6 py-5 space-y-5 max-h-[78vh] overflow-y-auto">
@@ -532,10 +629,15 @@ function Stage2Form({ rfq, onSave, onClose }) {
       {/* Header Info */}
       <div className="bg-slate-50 rounded-xl border border-slate-200 p-4">
         <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Manhour Estimate — {rfq.requestWorkNo}</p>
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-3 gap-4">
           <div>
             <label className="text-xs font-semibold text-slate-600 block mb-1">MHE No.</label>
             <div className="px-3 py-2 text-sm font-bold text-[#0f2035] bg-white border border-slate-200 rounded-lg">{mheNo}</div>
+          </div>
+          <div>
+            <label className="text-xs font-semibold text-slate-600 block mb-1">Start Date</label>
+            <input type="date" value={dateStart} onChange={e => setDateStart(e.target.value)}
+              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-200" />
           </div>
           <div>
             <label className="text-xs font-semibold text-slate-600 block mb-1">Date of Completion <span className="text-red-500">*</span></label>
@@ -547,21 +649,40 @@ function Stage2Form({ rfq, onSave, onClose }) {
 
       {/* Manhour Estimate Table */}
       <div>
-        <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
           <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
             <ClipboardList size={15} /> Manhour Estimate Table
           </h3>
-          <button onClick={addRow}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg">
-            <Plus size={12} /> Add Activity
-          </button>
+          <div className="flex items-center gap-2">
+            {/* Template */}
+            <button onClick={downloadTemplate}
+              className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-lg">
+              <Download size={12} /> Template
+            </button>
+            {/* Import */}
+            <button onClick={() => importRef.current?.click()}
+              className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-green-700 bg-green-50 hover:bg-green-100 border border-green-300 rounded-lg">
+              <FileUp size={12} /> Import
+            </button>
+            <input ref={importRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={importFromExcel} />
+            {/* Export */}
+            <button onClick={exportToExcel}
+              className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-300 rounded-lg">
+              <Download size={12} /> Export
+            </button>
+            {/* Add row */}
+            <button onClick={addRow}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg">
+              <Plus size={12} /> Add Activity
+            </button>
+          </div>
         </div>
 
         <div className="overflow-x-auto rounded-xl border border-slate-200">
           <table className="w-full text-xs" style={{ minWidth: 900 }}>
             <thead className="bg-[#0f2035] text-white">
               <tr>
-                <th className="px-2 py-2.5 text-center font-semibold w-10">#</th>
+                <th className="px-2 py-2.5 text-center font-semibold w-16">#</th>
                 <th className="px-2 py-2.5 text-left font-semibold min-w-[160px]">Activity Name</th>
                 <th className="px-2 py-2.5 text-left font-semibold w-28">Type</th>
                 <th className="px-2 py-2.5 text-left font-semibold min-w-[120px]">Additional Info</th>
@@ -570,59 +691,101 @@ function Stage2Form({ rfq, onSave, onClose }) {
                 <th className="px-2 py-2.5 text-right font-semibold w-20">Total MH</th>
                 <th className="px-2 py-2.5 text-left font-semibold w-36">Assign Engineer</th>
                 <th className="px-2 py-2.5 text-left font-semibold min-w-[120px]">Note</th>
-                <th className="px-2 py-2.5 w-8"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {rows.map((row, idx) => (
-                <tr key={row.id} className="hover:bg-blue-50 bg-cyan-50/30">
-                  <td className="px-2 py-1.5 text-center font-bold text-slate-400 text-[10px]">{String(idx + 1).padStart(2, '0')}</td>
-                  <td className="px-2 py-1.5">
-                    <input value={row.activityName} onChange={e => updateRow(row.id, 'activityName', e.target.value)}
-                      placeholder="Activity name…"
-                      className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-blue-400 bg-white" />
-                  </td>
-                  <td className="px-2 py-1.5">
-                    <select value={row.type} onChange={e => updateRow(row.id, 'type', e.target.value)}
-                      className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-blue-400 bg-white">
-                      {MHE_TYPES.map(t => <option key={t}>{t}</option>)}
-                    </select>
-                  </td>
-                  <td className="px-2 py-1.5">
-                    <input value={row.additionalInfo} onChange={e => updateRow(row.id, 'additionalInfo', e.target.value)}
-                      placeholder="Detail…"
-                      className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-blue-400 bg-white" />
-                  </td>
-                  <td className="px-2 py-1.5">
-                    <input type="text" inputMode="numeric" value={row.qty} onChange={e => updateRow(row.id, 'qty', e.target.value)}
-                      className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-blue-400 bg-white text-right" />
-                  </td>
-                  <td className="px-2 py-1.5">
-                    <input type="text" inputMode="numeric" value={row.unitMH} onChange={e => updateRow(row.id, 'unitMH', e.target.value)}
-                      className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-blue-400 bg-white text-right" />
-                  </td>
-                  <td className="px-2 py-1.5 text-right font-bold text-[#0f2035] tabular-nums">
-                    {row.totalMH > 0 ? row.totalMH : '—'}
-                  </td>
-                  <td className="px-2 py-1.5">
-                    <select value={row.assignEngineer} onChange={e => updateRow(row.id, 'assignEngineer', e.target.value)}
-                      className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-blue-400 bg-white">
-                      <option value="">— Select —</option>
-                      {engOptions.map(n => <option key={n}>{n}</option>)}
-                    </select>
-                  </td>
-                  <td className="px-2 py-1.5">
-                    <input value={row.note} onChange={e => updateRow(row.id, 'note', e.target.value)}
-                      placeholder="Note…"
-                      className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-blue-400 bg-white" />
-                  </td>
-                  <td className="px-2 py-1.5">
-                    <button onClick={() => removeRow(row.id)} className="text-slate-300 hover:text-red-500 transition-colors">
-                      <Trash2 size={13} />
-                    </button>
-                  </td>
-                </tr>
-              ))}
+              {rows.map((row, idx) => {
+                const isEditing = editingId !== null && editingId === row.id
+                return (
+                  <tr key={row.id} className={`${isEditing ? 'bg-blue-50 ring-1 ring-inset ring-blue-300' : 'hover:bg-slate-50 bg-cyan-50/20'}`}>
+                    {/* # + action buttons — always visible in first column */}
+                    <td className="px-2 py-1.5 text-center w-16">
+                      <div className="flex flex-col items-center gap-0.5">
+                        <span className="font-bold text-slate-400 text-[10px]">{String(idx + 1).padStart(2, '0')}</span>
+                        {!isEditing && (
+                          <div className="flex gap-0.5">
+                            <button onClick={() => startEdit(row)} title="Edit"
+                              className="p-0.5 rounded text-blue-400 hover:text-blue-600 hover:bg-blue-50 transition-colors">
+                              <Pencil size={11} />
+                            </button>
+                            <button onClick={() => removeRow(row.id)} title="Delete"
+                              className="p-0.5 rounded text-red-400 hover:text-red-600 hover:bg-red-50 transition-colors">
+                              <Trash2 size={11} />
+                            </button>
+                          </div>
+                        )}
+                        {isEditing && (
+                          <div className="flex gap-0.5">
+                            <button onClick={saveEdit} title="Save"
+                              className="p-0.5 rounded text-green-600 hover:bg-green-50 transition-colors">
+                              <CheckCircle size={11} />
+                            </button>
+                            <button onClick={cancelEdit} title="Cancel"
+                              className="p-0.5 rounded text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors">
+                              <XCircle size={11} />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </td>
+
+                    {isEditing ? (
+                      <>
+                        <td className="px-2 py-1.5">
+                          <input value={editBuf.activityName} onChange={e => setBuf('activityName', e.target.value)}
+                            autoFocus placeholder="Activity name…"
+                            className="w-full px-2 py-1 text-xs border border-blue-300 rounded outline-none focus:border-blue-500 bg-white" />
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <select value={editBuf.type} onChange={e => setBuf('type', e.target.value)}
+                            className="w-full px-2 py-1 text-xs border border-blue-300 rounded outline-none focus:border-blue-500 bg-white">
+                            {MHE_TYPES.map(t => <option key={t}>{t}</option>)}
+                          </select>
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <input value={editBuf.additionalInfo} onChange={e => setBuf('additionalInfo', e.target.value)}
+                            placeholder="Detail…"
+                            className="w-full px-2 py-1 text-xs border border-blue-300 rounded outline-none focus:border-blue-500 bg-white" />
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <input type="text" inputMode="numeric" value={editBuf.qty} onChange={e => setBuf('qty', e.target.value)}
+                            className="w-full px-2 py-1 text-xs border border-blue-300 rounded outline-none focus:border-blue-500 bg-white text-right" />
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <input type="text" inputMode="numeric" value={editBuf.unitMH} onChange={e => setBuf('unitMH', e.target.value)}
+                            className="w-full px-2 py-1 text-xs border border-blue-300 rounded outline-none focus:border-blue-500 bg-white text-right" />
+                        </td>
+                        <td className="px-2 py-1.5 text-right font-bold text-blue-700 tabular-nums">
+                          {+((parseFloat(editBuf.qty)||0)*(parseFloat(editBuf.unitMH)||0)).toFixed(2) || '—'}
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <select value={editBuf.assignEngineer} onChange={e => setBuf('assignEngineer', e.target.value)}
+                            className="w-full px-2 py-1 text-xs border border-blue-300 rounded outline-none focus:border-blue-500 bg-white">
+                            <option value="">— Select —</option>
+                            {engOptions.map(n => <option key={n}>{n}</option>)}
+                          </select>
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <input value={editBuf.note} onChange={e => setBuf('note', e.target.value)}
+                            placeholder="Note…"
+                            className="w-full px-2 py-1 text-xs border border-blue-300 rounded outline-none focus:border-blue-500 bg-white" />
+                        </td>
+                      </>
+                    ) : (
+                      <>
+                        <td className="px-2 py-1.5 text-slate-800 font-medium">{row.activityName || <span className="text-slate-400 italic">—</span>}</td>
+                        <td className="px-2 py-1.5 text-slate-500">{row.type}</td>
+                        <td className="px-2 py-1.5 text-slate-500">{row.additionalInfo || '—'}</td>
+                        <td className="px-2 py-1.5 text-right tabular-nums text-slate-700">{row.qty || '—'}</td>
+                        <td className="px-2 py-1.5 text-right tabular-nums text-slate-700">{row.unitMH || '—'}</td>
+                        <td className="px-2 py-1.5 text-right font-bold text-[#0f2035] tabular-nums">{row.totalMH > 0 ? row.totalMH : '—'}</td>
+                        <td className="px-2 py-1.5 text-slate-500 text-[10px]">{row.assignEngineer || '—'}</td>
+                        <td className="px-2 py-1.5 text-slate-500">{row.note || '—'}</td>
+                      </>
+                    )}
+                  </tr>
+                )
+              })}
             </tbody>
             <tfoot className="bg-slate-100 border-t-2 border-slate-300">
               <tr>
@@ -638,20 +801,23 @@ function Stage2Form({ rfq, onSave, onClose }) {
         )}
       </div>
 
-      <div className="flex justify-between gap-3 pt-2 border-t border-slate-100">
+      <div className="flex justify-between gap-3 pt-2 border-t border-slate-100 flex-wrap">
         <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg">Cancel</button>
-        <button
-          onClick={() => canSubmit && onSave({
-            mheNo, dateCompletion, mheRows: rows,
-            wbsItems: rows.map(r => ({ id: r.id, task: r.activityName, unit: 'activity', qty: parseFloat(r.qty)||0, unitMH: parseFloat(r.unitMH)||0, totalMH: r.totalMH||0, type: r.type, additionalInfo: r.additionalInfo, assignEngineer: r.assignEngineer, note: r.note })),
-            assignedEngineers: [...new Set(rows.filter(r => r.assignEngineer).map(r => teamRates.find(t => t.name === r.assignEngineer)?.id).filter(Boolean))],
-            totalPlannedMH: +totalMH.toFixed(2),
-            status: 'Pending Manager',
-          })}
-          disabled={!canSubmit}
-          className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
-          Submit to Cost Estimate <ArrowRight size={14} />
-        </button>
+        <div className="flex items-center gap-2">
+          {/* Save Draft */}
+          <button onClick={handleSaveDraft}
+            className="px-4 py-2 text-sm font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded-lg flex items-center gap-2">
+            <Save size={14} />
+            {draftSaved ? 'Saved ✓' : 'Save Draft'}
+          </button>
+          {/* Submit */}
+          <button
+            onClick={() => canSubmit && onSave(buildPayload('Pending Manager'))}
+            disabled={!canSubmit}
+            className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
+            Submit to Cost Estimate <ArrowRight size={14} />
+          </button>
+        </div>
       </div>
     </div>
   )
@@ -1826,7 +1992,8 @@ export default function RFQ() {
           <>
             <div className="px-6 pt-4"><Stepper status={activeModal.rfq.status} /></div>
             <Stage2Form rfq={activeModal.rfq} onClose={closeModal}
-              onSave={(data) => { updateRfq(activeModal.rfq.id, data); closeModal() }} />
+              onSave={(data) => { updateRfq(activeModal.rfq.id, data); closeModal() }}
+              onSaveDraft={(data) => updateRfq(activeModal.rfq.id, data)} />
           </>
         )}
       </Modal>
