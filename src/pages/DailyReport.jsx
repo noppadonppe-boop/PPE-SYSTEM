@@ -525,9 +525,9 @@ export default function DailyReport() {
   const [filterWO, setFilterWO]       = useState('All')
   const [activeModal, setActiveModal] = useState(null)
 
-  const canSubmit  = ['ppeTeam', 'ppeLead', 'ppeManager', 'ppeAdmin'].includes(currentRole)
-  const canReview  = ['ppeLead', 'ppeManager', 'ppeAdmin'].includes(currentRole)
-  const canLogSheet= ['ppeLead', 'ppeManager', 'ppeAdmin', 'GM/MD'].includes(currentRole)
+  const canSubmit  = ['ppeTeam', 'ppeLead', 'ppeManager', 'ppeAdmin', 'MasterAdmin'].includes(currentRole)
+  const canReview  = ['ppeLead', 'ppeManager', 'ppeAdmin', 'MasterAdmin'].includes(currentRole)
+  const canLogSheet= ['ppeLead', 'ppeManager', 'ppeAdmin', 'MasterAdmin', 'GM/MD'].includes(currentRole)
 
   const ongoingWOs = workOrders.filter(w => w.status === 'Ongoing')
 
@@ -607,7 +607,14 @@ export default function DailyReport() {
           <p className="text-xs text-slate-500 mt-0.5">Submit daily progress — ppeLead reviews and accepts each report</p>
         </div>
         {canSubmit && ongoingWOs.length > 0 && (
-          <button onClick={() => openModal('submit')}
+          <button
+            onClick={() => {
+              if (ongoingWOs.length === 1) {
+                openModal('form', { wo: ongoingWOs[0] })
+              } else {
+                openModal('submit')
+              }
+            }}
             className="flex items-center gap-2 px-4 py-2 bg-[#0f2035] text-white text-sm font-medium rounded-lg hover:bg-[#162d4a] transition-colors">
             <Plus size={16} /> Submit Daily Report
           </button>
@@ -636,23 +643,25 @@ export default function DailyReport() {
         ))}
       </div>
 
-      {/* Tabs */}
-      <div className="flex gap-1 bg-slate-100 rounded-xl p-1 w-fit">
-        {[
-          { id: 'reports',  label: 'Daily Reports', icon: ClipboardList },
-          ...(canLogSheet ? [{ id: 'logsheet', label: 'Log Sheet', icon: ListChecks }] : []),
-        ].map(t => (
-          <button key={t.id} onClick={() => setActiveTab(t.id)}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-              activeTab === t.id ? 'bg-white text-[#0f2035] shadow-sm' : 'text-slate-500 hover:text-slate-700'
-            }`}>
-            <t.icon size={14} /> {t.label}
-            {t.id === 'reports' && pendingReview > 0 && (
-              <span className="ml-1 px-1.5 py-0.5 text-[10px] font-bold bg-orange-500 text-white rounded-full">{pendingReview}</span>
-            )}
-          </button>
-        ))}
-      </div>
+      {/* Tabs — only show when there are multiple tabs */}
+      {canLogSheet && (
+        <div className="flex gap-1 bg-slate-100 rounded-xl p-1 w-fit">
+          {[
+            { id: 'reports',  label: 'Daily Reports', icon: ClipboardList },
+            { id: 'logsheet', label: 'Log Sheet',     icon: ListChecks },
+          ].map(t => (
+            <button key={t.id} onClick={() => setActiveTab(t.id)}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                activeTab === t.id ? 'bg-white text-[#0f2035] shadow-sm' : 'text-slate-500 hover:text-slate-700'
+              }`}>
+              <t.icon size={14} /> {t.label}
+              {t.id === 'reports' && pendingReview > 0 && (
+                <span className="ml-1 px-1.5 py-0.5 text-[10px] font-bold bg-orange-500 text-white rounded-full">{pendingReview}</span>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* ── Daily Reports tab ── */}
       {activeTab === 'reports' && (

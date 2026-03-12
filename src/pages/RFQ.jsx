@@ -1369,9 +1369,9 @@ export default function RFQ() {
   }
 
   const canCreateRfq  = true
-  const canPlanMH     = ['ppeLead', 'ppeAdmin'].includes(currentRole)
-  const canCostEst    = ['ppeManager', 'ppeAdmin'].includes(currentRole)
-  const canApprove    = ['Requestor', 'GM/MD', 'ppeAdmin'].includes(currentRole)
+  const canPlanMH     = ['ppeLead', 'ppeAdmin', 'MasterAdmin'].includes(currentRole)
+  const canCostEst    = ['ppeManager', 'ppeAdmin', 'MasterAdmin'].includes(currentRole)
+  const canApprove    = ['Requestor', 'GM/MD', 'ppeAdmin', 'MasterAdmin'].includes(currentRole)
 
   // Reset to a valid tab when the current one becomes inaccessible (e.g. ppeLead on 'cost')
   React.useEffect(() => {
@@ -1390,7 +1390,7 @@ export default function RFQ() {
   const approvedToProcessRfqs = rfqs.filter(r => r.status === 'Approved to Process')
 
   // Cost tab hidden from ppeLead
-  const canSeeCostTab = !['ppeLead'].includes(currentRole) || currentRole === 'ppeAdmin'
+  const canSeeCostTab = !['ppeLead'].includes(currentRole) || ['ppeAdmin', 'MasterAdmin'].includes(currentRole)
 
   // Summary stats
   const stats = [

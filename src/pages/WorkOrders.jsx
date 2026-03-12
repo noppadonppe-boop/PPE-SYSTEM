@@ -253,7 +253,7 @@ export default function WorkOrders() {
   const [filterStatus, setFilterStatus] = useState('All')
   const [activeModal, setActiveModal]   = useState(null) // { type, wo }
 
-  const canActivate = ['ppeLead', 'ppeManager', 'ppeAdmin', 'GM/MD'].includes(currentRole)
+  const canActivate = ['ppeLead', 'ppeManager', 'ppeAdmin', 'MasterAdmin', 'GM/MD'].includes(currentRole)
 
   // Approved RFQs (either 'Approved' or 'Approved to Process') that don't yet have a WO
   const existingRfqIds = useMemo(() => new Set(workOrders.map(w => w.rfqId)), [workOrders])

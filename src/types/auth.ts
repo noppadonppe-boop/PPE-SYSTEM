@@ -6,6 +6,7 @@ export const USER_ROLES = [
   'ppeManager',
   'ppeTeam',
   'ppeAdmin',
+  'MasterAdmin',
   'GM/MD',
 ] as const
 

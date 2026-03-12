@@ -12,7 +12,7 @@ const EMPTY_FORM = { category: 'Mechanical', task: '', unit: '', min: '', max: '
 export default function UnitRates() {
   const { unitRates, addUnitRate, updateUnitRate, deleteUnitRate, currentRole } = useApp()
 
-  const canEdit = ['ppeLead', 'ppeManager', 'ppeAdmin', 'GM/MD'].includes(currentRole)
+  const canEdit = ['ppeLead', 'ppeManager', 'ppeAdmin', 'MasterAdmin', 'GM/MD'].includes(currentRole)
 
   // ── Excel state ──────────────────────────────────────────────────────────
   const importRef = useRef(null)

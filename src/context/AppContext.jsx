@@ -15,12 +15,13 @@ const subDocRef = (name, id) => doc(db, ROOT_COL, ROOT_DOC, name, id)
 // ─── ROLES ───────────────────────────────────────────────────────────────────
 
 export const ROLES = [
-  { id: 'Requestor', label: 'Requestor' },
-  { id: 'ppeLead',    label: 'ppeLead' },
-  { id: 'ppeManager', label: 'ppeManager' },
-  { id: 'ppeTeam',    label: 'ppeTeam' },
-  { id: 'ppeAdmin',   label: 'ppeAdmin' },
-  { id: 'GM/MD',      label: 'GM/MD' },
+  { id: 'Requestor',   label: 'Requestor' },
+  { id: 'ppeLead',     label: 'ppeLead' },
+  { id: 'ppeManager',  label: 'ppeManager' },
+  { id: 'ppeTeam',     label: 'ppeTeam' },
+  { id: 'ppeAdmin',    label: 'ppeAdmin' },
+  { id: 'MasterAdmin', label: 'MasterAdmin' },
+  { id: 'GM/MD',       label: 'GM/MD' },
 ]
 
 // ─── CONTEXT ─────────────────────────────────────────────────────────────────
@@ -157,7 +158,7 @@ export function AppProvider({ children }) {
     const notes = []
 
     rfqs.forEach(rfq => {
-      if (rfq.status === 'Pending Lead' && (currentRole === 'ppeLead' || currentRole === 'ppeAdmin')) {
+      if (rfq.status === 'Pending Lead' && ['ppeLead', 'ppeAdmin', 'MasterAdmin'].includes(currentRole)) {
         notes.push({
           id: `n-${rfq.id}-lead`,
           title: 'Manhour Plan Required',
@@ -167,7 +168,7 @@ export function AppProvider({ children }) {
           priority: rfq.urgency === 'Urgent' ? 'high' : 'medium', module: 'RFQ',
         })
       }
-      if (rfq.status === 'Pending Manager' && (currentRole === 'ppeManager' || currentRole === 'ppeAdmin')) {
+      if (rfq.status === 'Pending Manager' && ['ppeManager', 'ppeAdmin', 'MasterAdmin'].includes(currentRole)) {
         notes.push({
           id: `n-${rfq.id}-manager`,
           title: 'Cost Estimate Required',
@@ -177,7 +178,7 @@ export function AppProvider({ children }) {
           priority: rfq.urgency === 'Urgent' ? 'high' : 'medium', module: 'RFQ',
         })
       }
-      if (rfq.status === 'Pending Approval' && (currentRole === 'Requestor' || currentRole === 'GM/MD')) {
+      if (rfq.status === 'Pending Approval' && ['Requestor', 'GM/MD', 'ppeAdmin', 'MasterAdmin'].includes(currentRole)) {
         notes.push({
           id: `n-${rfq.id}-approval`,
           title: 'Approval Required',
@@ -190,7 +191,7 @@ export function AppProvider({ children }) {
 
     const existingRfqIds = new Set(workOrders.map(w => w.rfqId))
     rfqs.filter(r => r.status === 'Approved' && !existingRfqIds.has(r.id)).forEach(rfq => {
-      if (['ppeLead', 'ppeManager', 'ppeAdmin'].includes(currentRole)) {
+      if (['ppeLead', 'ppeManager', 'ppeAdmin', 'MasterAdmin'].includes(currentRole)) {
         notes.push({
           id: `n-${rfq.id}-wo`,
           title: 'Work Order Not Created',
@@ -202,7 +203,7 @@ export function AppProvider({ children }) {
     })
 
     workOrders.forEach(wo => {
-      if (wo.status === 'Pending Schedule' && ['ppeLead', 'ppeManager', 'ppeAdmin'].includes(currentRole)) {
+      if (wo.status === 'Pending Schedule' && ['ppeLead', 'ppeManager', 'ppeAdmin', 'MasterAdmin'].includes(currentRole)) {
         notes.push({
           id: `n-${wo.id}-schedule`,
           title: 'Schedule Not Set',
@@ -211,7 +212,7 @@ export function AppProvider({ children }) {
           link: '/work-orders', type: 'action', priority: 'medium', module: 'Work Order',
         })
       }
-      if (wo.status === 'Ongoing' && ['ppeTeam', 'ppeLead'].includes(currentRole)) {
+      if (wo.status === 'Ongoing' && ['ppeTeam', 'ppeLead', 'ppeAdmin', 'MasterAdmin'].includes(currentRole)) {
         const today = new Date().toISOString().split('T')[0]
         const hasReportToday = dailyReports.filter(d => d.workOrderId === wo.id).some(d => d.reportDate === today)
         if (!hasReportToday) {
@@ -224,7 +225,7 @@ export function AppProvider({ children }) {
           })
         }
       }
-      if (wo.status === 'Ongoing' && ['ppeManager', 'ppeAdmin'].includes(currentRole)) {
+      if (wo.status === 'Ongoing' && ['ppeManager', 'ppeAdmin', 'MasterAdmin'].includes(currentRole)) {
         const latestDr = [...dailyReports]
           .filter(d => d.workOrderId === wo.id)
           .sort((a, b) => b.reportDate.localeCompare(a.reportDate))[0]

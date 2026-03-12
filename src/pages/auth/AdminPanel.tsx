@@ -13,12 +13,13 @@ const APP_NAME = 'PPE System'
 const ROOT_DOC = 'root'
 
 const ROLE_LABELS: Record<string, string> = {
-  'Requestor':  'Requestor',
-  'ppeLead':    'ppeLead',
-  'ppeManager': 'ppeManager',
-  'ppeTeam':    'ppeTeam',
-  'ppeAdmin':   'ppeAdmin',
-  'GM/MD':      'GM/MD',
+  'Requestor':   'Requestor',
+  'ppeLead':     'ppeLead',
+  'ppeManager':  'ppeManager',
+  'ppeTeam':     'ppeTeam',
+  'ppeAdmin':    'ppeAdmin',
+  'MasterAdmin': 'MasterAdmin',
+  'GM/MD':       'GM/MD',
 }
 
 const STATUS_CONFIG = {
