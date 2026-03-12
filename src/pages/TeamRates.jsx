@@ -14,6 +14,8 @@ const POSITIONS = [
   'Technician',
   'Drafter',
   'Admin',
+  'Senior Architect',
+  'Architect',
 ]
 
 const ALLOWED_ROLES = ['ppeLead', 'ppeManager', 'ppeAdmin', 'MasterAdmin', 'GM/MD']

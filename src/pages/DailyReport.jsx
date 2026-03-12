@@ -38,7 +38,28 @@ function DailyReportForm({ workOrder, teamRates, existingReports, editTarget, on
   const allMheRows = workOrder.mheRows || workOrder.wbsItems || []
 
   const initActivityRows = (reporterId, existingRows) => {
-    const myRows = allMheRows.filter(r => !r.assignEngineer || r.assignEngineer === reporterId || reporterId === '')
+    if (!reporterId) {
+      // No reporter selected → show all rows
+      if (existingRows && existingRows.length > 0) return existingRows
+      return allMheRows.map(r => ({
+        id:             r.id || r.activityName || Math.random().toString(36).slice(2),
+        activityName:   r.activityName || r.task || '',
+        totalMH:        r.totalMH || 0,
+        assignEngineer: r.assignEngineer || '',
+        prevProgress:   0,
+        todayProgress:  '',
+        spentMHToday:   '',
+        note:           '',
+      }))
+    }
+    // Reporter selected → resolve their name and id, match both
+    const reporter     = teamRates.find(t => t.id === reporterId)
+    const reporterName = reporter?.name || ''
+    const myRows = allMheRows.filter(r =>
+      !r.assignEngineer ||                              // unassigned → show to everyone
+      r.assignEngineer === reporterName ||              // match by name (new mheRows)
+      r.assignEngineer === reporterId                   // match by id (old wbsItems)
+    )
     if (existingRows && existingRows.length > 0) return existingRows
     return myRows.map(r => ({
       id:            r.id || r.activityName || Math.random().toString(36).slice(2),

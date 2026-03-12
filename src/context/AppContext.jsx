@@ -141,6 +141,9 @@ export function AppProvider({ children }) {
   const updateWorkOrder = async (id, data) => {
     await updateDoc(subDocRef('workOrders', id), data)
   }
+  const deleteWorkOrder = async (id) => {
+    await deleteDoc(subDocRef('workOrders', id))
+  }
 
   // ── Daily Report CRUD ───────────────────────────────────────────────────
   const addDailyReport = async (data) => {
@@ -250,7 +253,7 @@ export function AppProvider({ children }) {
     unitRates, addUnitRate, updateUnitRate, deleteUnitRate,
     teamRates, addTeamRate, updateTeamRate, deleteTeamRate,
     rfqs, addRfq, updateRfq, deleteRfq,
-    workOrders, addWorkOrder, updateWorkOrder,
+    workOrders, addWorkOrder, updateWorkOrder, deleteWorkOrder,
     dailyReports, addDailyReport, updateDailyReport,
     getTeamMemberById,
     getNotifications,

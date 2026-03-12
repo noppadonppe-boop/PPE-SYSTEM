@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react'
 import {
   Plus, Pencil, Eye, Search, CalendarDays,
-  CheckCircle, PlayCircle, AlertTriangle, Rocket,
+  CheckCircle, PlayCircle, AlertTriangle, Rocket, Trash2, RotateCcw,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import Modal from '../components/ui/Modal'
@@ -247,13 +247,14 @@ function WorkProgressModal({ wo, onClose }) {
 // ── Main WorkOrders Page ──────────────────────────────────────────────────────
 
 export default function WorkOrders() {
-  const { rfqs, workOrders, addWorkOrder, updateWorkOrder, dailyReports, teamRates, currentRole } = useApp()
+  const { rfqs, workOrders, addWorkOrder, updateWorkOrder, deleteWorkOrder, dailyReports, teamRates, currentRole } = useApp()
 
   const [search, setSearch]             = useState('')
   const [filterStatus, setFilterStatus] = useState('All')
   const [activeModal, setActiveModal]   = useState(null) // { type, wo }
 
-  const canActivate = ['ppeLead', 'ppeManager', 'ppeAdmin', 'MasterAdmin', 'GM/MD'].includes(currentRole)
+  const canActivate  = ['ppeLead', 'ppeManager', 'ppeAdmin', 'MasterAdmin', 'GM/MD'].includes(currentRole)
+  const isSuperAdmin = ['ppeAdmin', 'MasterAdmin'].includes(currentRole)
 
   // Approved RFQs (either 'Approved' or 'Approved to Process') that don't yet have a WO
   const existingRfqIds = useMemo(() => new Set(workOrders.map(w => w.rfqId)), [workOrders])
@@ -445,11 +446,23 @@ export default function WorkOrders() {
                             <CheckCircle size={15} />
                           </button>
                         )}
+                        {isSuperAdmin && wo.status === 'Completed' && (
+                          <button onClick={() => updateWorkOrder(wo.id, { status: 'Ongoing' })}
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors" title="Revert to Ongoing">
+                            <RotateCcw size={15} />
+                          </button>
+                        )}
                         <button onClick={() => openModal('progress', wo)}
                           title="Work Progress Report"
                           className="p-1.5 rounded-lg text-slate-400 hover:text-cyan-600 hover:bg-cyan-50 transition-colors">
                           <Eye size={15} />
                         </button>
+                        {isSuperAdmin && (
+                          <button onClick={() => openModal('delete', wo)}
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors" title="Delete Work Order">
+                            <Trash2 size={15} />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -459,6 +472,35 @@ export default function WorkOrders() {
           </table>
         </div>
       </div>
+
+      {/* Delete Work Order Confirm */}
+      <Modal isOpen={activeModal?.type === 'delete'} onClose={closeModal}
+        title="Delete Work Order" size="sm">
+        {activeModal?.wo && (
+          <div className="px-6 py-5 space-y-4">
+            <div className="flex items-start gap-3 bg-red-50 border border-red-200 rounded-lg px-4 py-3">
+              <AlertTriangle size={16} className="text-red-500 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-semibold text-red-800">Delete Work Order?</p>
+                <p className="text-xs text-red-600 mt-0.5">
+                  <span className="font-bold">{activeModal.wo.requestWorkNo}</span> — {activeModal.wo.client || ''}
+                </p>
+                <p className="text-xs text-red-500 mt-1">This action cannot be undone. All associated data will be removed.</p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-3 pt-2 border-t border-slate-100">
+              <button onClick={closeModal}
+                className="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg">
+                Cancel
+              </button>
+              <button onClick={() => { deleteWorkOrder(activeModal.wo.id); closeModal() }}
+                className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg flex items-center gap-2">
+                <Trash2 size={14} /> Delete
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
 
       {/* Schedule / Start Work Modal */}
       <Modal isOpen={activeModal?.type === 'schedule'} onClose={closeModal}

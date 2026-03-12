@@ -216,9 +216,10 @@ const EMPTY_RFQ_FORM = {
   photoNames:     [],
 }
 
-function Stage1Form({ onSave, onClose, initial }) {
+function Stage1Form({ onSave, onClose, initial, isRevise }) {
   const [form, setForm] = useState(initial || EMPTY_RFQ_FORM)
   const [errors, setErrors] = useState({})
+  const [revisionNote, setRevisionNote] = useState('')
 
   // Auto-generate work no prefix when serviceType changes
   const handleServiceType = (val) => {
@@ -246,6 +247,7 @@ function Stage1Form({ onSave, onClose, initial }) {
       e.emailRequestor = 'Invalid email'
     if (!form.client.trim())          e.client          = 'Required'
     if (!form.s3WorkKind.trim())      e.s3WorkKind      = 'Required'
+    if (isRevise && !revisionNote.trim()) e.revisionNote = 'Please describe what you revised or added before resubmitting'
     setErrors(e)
     return Object.keys(e).length === 0
   }
@@ -446,9 +448,36 @@ function Stage1Form({ onSave, onClose, initial }) {
         />
       </div>
 
+      {/* Revision Note — only shown when revising a returned RFQ */}
+      {isRevise && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-2">
+          <label className="block text-xs font-bold text-amber-800 uppercase tracking-wider">
+            Revision Note <span className="text-red-500">*</span>
+            <span className="ml-1 font-normal normal-case text-amber-700">— required before resubmitting</span>
+          </label>
+          <textarea
+            rows={3}
+            value={revisionNote}
+            onChange={e => { setRevisionNote(e.target.value); setErrors(p => ({ ...p, revisionNote: '' })) }}
+            placeholder="Describe what you revised, added, or clarified in this resubmission…"
+            className={`w-full px-3 py-2 text-sm border rounded-lg outline-none resize-none transition-colors ${
+              errors.revisionNote
+                ? 'border-red-400 bg-red-50 focus:border-red-400'
+                : 'border-amber-300 bg-white focus:border-amber-500 focus:ring-1 focus:ring-amber-200'
+            }`}
+          />
+          {errors.revisionNote && (
+            <p className="text-xs text-red-600 flex items-center gap-1">
+              <span className="inline-block w-3 h-3 rounded-full bg-red-500 text-white text-[9px] flex items-center justify-center font-bold">!</span>
+              {errors.revisionNote}
+            </p>
+          )}
+        </div>
+      )}
+
       <div className="flex justify-end gap-3 pt-2 border-t border-slate-100">
         <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg">Cancel</button>
-        <button onClick={() => validate() && onSave(form)}
+        <button onClick={() => validate() && onSave(form, revisionNote)}
           className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg flex items-center gap-2">
           Submit RFQ <ArrowRight size={14} />
         </button>
@@ -536,8 +565,8 @@ function Stage2Form({ rfq, onSave, onClose }) {
                 <th className="px-2 py-2.5 text-left font-semibold min-w-[160px]">Activity Name</th>
                 <th className="px-2 py-2.5 text-left font-semibold w-28">Type</th>
                 <th className="px-2 py-2.5 text-left font-semibold min-w-[120px]">Additional Info</th>
-                <th className="px-2 py-2.5 text-right font-semibold w-16">Qty</th>
-                <th className="px-2 py-2.5 text-right font-semibold w-20">Unit MH</th>
+                <th className="px-2 py-2.5 text-right font-semibold w-24">Qty</th>
+                <th className="px-2 py-2.5 text-right font-semibold w-28">Unit MH</th>
                 <th className="px-2 py-2.5 text-right font-semibold w-20">Total MH</th>
                 <th className="px-2 py-2.5 text-left font-semibold w-36">Assign Engineer</th>
                 <th className="px-2 py-2.5 text-left font-semibold min-w-[120px]">Note</th>
@@ -565,11 +594,11 @@ function Stage2Form({ rfq, onSave, onClose }) {
                       className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-blue-400 bg-white" />
                   </td>
                   <td className="px-2 py-1.5">
-                    <input type="number" min="0" step="0.1" value={row.qty} onChange={e => updateRow(row.id, 'qty', e.target.value)}
+                    <input type="text" inputMode="numeric" value={row.qty} onChange={e => updateRow(row.id, 'qty', e.target.value)}
                       className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-blue-400 bg-white text-right" />
                   </td>
                   <td className="px-2 py-1.5">
-                    <input type="number" min="0" step="0.01" value={row.unitMH} onChange={e => updateRow(row.id, 'unitMH', e.target.value)}
+                    <input type="text" inputMode="numeric" value={row.unitMH} onChange={e => updateRow(row.id, 'unitMH', e.target.value)}
                       className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-blue-400 bg-white text-right" />
                   </td>
                   <td className="px-2 py-1.5 text-right font-bold text-[#0f2035] tabular-nums">
@@ -806,7 +835,7 @@ function Stage3Form({ rfq, onSave, onClose, onCancel }) {
                 <th className="px-2 py-2.5 text-left min-w-[180px]">Description</th>
                 <th className="px-2 py-2.5 text-left w-20">Unit</th>
                 <th className="px-2 py-2.5 text-right w-24">Rate</th>
-                <th className="px-2 py-2.5 text-right w-16">Qty</th>
+                <th className="px-2 py-2.5 text-right w-24">Qty</th>
                 <th className="px-2 py-2.5 text-right w-28">Amount</th>
                 <th className="px-2 py-2.5 text-left min-w-[100px]">Note</th>
                 <th className="px-2 py-2.5 w-8"></th>
@@ -832,7 +861,7 @@ function Stage3Form({ rfq, onSave, onClose, onCancel }) {
                       className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-indigo-400 bg-white text-right" />
                   </td>
                   <td className="px-2 py-1.5">
-                    <input type="number" min="0" value={row.qty} onChange={e => updateIndirect(row.id, 'qty', e.target.value)}
+                    <input type="text" inputMode="numeric" value={row.qty} onChange={e => updateIndirect(row.id, 'qty', e.target.value)}
                       placeholder="0"
                       className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-indigo-400 bg-white text-right" />
                   </td>
@@ -1231,7 +1260,7 @@ function StatusPill({ status }) {
   )
 }
 
-function RFQTable({ rows, onAction, onDetail, onEdit, onDelete, actionLabel, actionColor, emptyMsg, canEdit, showEditDelete }) {
+function RFQTable({ rows, onAction, onDetail, onEdit, onDelete, actionLabel, actionColor, emptyMsg, canEdit, showEditDelete, isMasterAdmin }) {
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState('All')
 
@@ -1250,7 +1279,7 @@ function RFQTable({ rows, onAction, onDetail, onEdit, onDelete, actionLabel, act
     return list.sort((a, b) => (b.submittedAt || '').localeCompare(a.submittedAt || ''))
   }, [rows, search, filterStatus])
 
-  const canDelete = (rfq) => !['Approved', 'Approved to Process'].includes(rfq.status)
+  const canDelete = (rfq) => isMasterAdmin || !['Approved', 'Approved to Process'].includes(rfq.status)
 
   return (
     <div className="space-y-3">
@@ -1368,6 +1397,7 @@ export default function RFQ() {
     if (deleteTarget) { await deleteRfq(deleteTarget.id); setDeleteTarget(null) }
   }
 
+  const isMasterAdmin = ['ppeAdmin', 'MasterAdmin'].includes(currentRole)
   const canCreateRfq  = true
   const canPlanMH     = ['ppeLead', 'ppeAdmin', 'MasterAdmin'].includes(currentRole)
   const canCostEst    = ['ppeManager', 'ppeAdmin', 'MasterAdmin'].includes(currentRole)
@@ -1389,8 +1419,8 @@ export default function RFQ() {
   const pendingApprovalRfqs   = rfqs.filter(r => r.status === 'Pending Approval')
   const approvedToProcessRfqs = rfqs.filter(r => r.status === 'Approved to Process')
 
-  // Cost tab hidden from ppeLead
-  const canSeeCostTab = !['ppeLead'].includes(currentRole) || ['ppeAdmin', 'MasterAdmin'].includes(currentRole)
+  // Cost tab hidden from ppeLead (but not from ppeAdmin/MasterAdmin)
+  const canSeeCostTab = isMasterAdmin || !['ppeLead'].includes(currentRole)
 
   // Summary stats
   const stats = [
@@ -1538,12 +1568,13 @@ export default function RFQ() {
                 <RFQTable
                   rows={rfqs}
                   onDetail={(rfq) => openModal('detail', rfq)}
-                  onEdit={(rfq) => openModal('edit', rfq)}
-                  onDelete={handleDelete}
+                  onEdit={isMasterAdmin ? (rfq) => openModal('edit', rfq) : undefined}
+                  onDelete={isMasterAdmin ? handleDelete : undefined}
                   onAction={null}
                   emptyMsg="No RFQ submissions yet. Click 'New RFQ' to create one."
                   canEdit={false}
-                  showEditDelete={true}
+                  showEditDelete={isMasterAdmin}
+                  isMasterAdmin={isMasterAdmin}
                 />
               </div>
             </div>
@@ -1576,10 +1607,14 @@ export default function RFQ() {
                   rows={pendingLeadRfqs}
                   onDetail={(rfq) => openModal('detail', rfq)}
                   onAction={canPlanMH ? (rfq) => openModal('leadReceive', rfq) : null}
+                  onEdit={isMasterAdmin ? (rfq) => openModal('edit', rfq) : undefined}
+                  onDelete={isMasterAdmin ? handleDelete : undefined}
                   actionLabel="Review & Respond"
                   actionColor="bg-yellow-500 hover:bg-yellow-600"
                   emptyMsg="No new RFQs pending review."
                   canEdit={canPlanMH}
+                  showEditDelete={isMasterAdmin}
+                  isMasterAdmin={isMasterAdmin}
                 />
               </div>
 
@@ -1595,10 +1630,14 @@ export default function RFQ() {
                   rows={pendingMHRfqs}
                   onDetail={(rfq) => openModal('detail', rfq)}
                   onAction={canPlanMH ? (rfq) => openModal('stage2', rfq) : null}
+                  onEdit={isMasterAdmin ? (rfq) => openModal('edit', rfq) : undefined}
+                  onDelete={isMasterAdmin ? handleDelete : undefined}
                   actionLabel="Plan MH"
                   actionColor="bg-blue-600 hover:bg-blue-700"
                   emptyMsg="No accepted RFQs awaiting manhour plan."
                   canEdit={canPlanMH}
+                  showEditDelete={isMasterAdmin}
+                  isMasterAdmin={isMasterAdmin}
                 />
               </div>
             </div>
@@ -1622,10 +1661,14 @@ export default function RFQ() {
                 rows={pendingManagerRfqs}
                 onDetail={(rfq) => openModal('detail', rfq)}
                 onAction={canCostEst ? (rfq) => openModal('stage3', rfq) : null}
+                onEdit={isMasterAdmin ? (rfq) => openModal('edit', rfq) : undefined}
+                onDelete={isMasterAdmin ? handleDelete : undefined}
                 actionLabel="Cost Estimate"
                 actionColor="bg-blue-600 hover:bg-blue-700"
                 emptyMsg="No RFQs pending cost estimation."
                 canEdit={canCostEst}
+                showEditDelete={isMasterAdmin}
+                isMasterAdmin={isMasterAdmin}
               />
             </div>
           )}
@@ -1657,10 +1700,14 @@ export default function RFQ() {
                   rows={pendingApprovalRfqs}
                   onDetail={(rfq) => openModal('detail', rfq)}
                   onAction={canApprove ? (rfq) => openModal('stage4', rfq) : null}
+                  onEdit={isMasterAdmin ? (rfq) => openModal('edit', rfq) : undefined}
+                  onDelete={isMasterAdmin ? handleDelete : undefined}
                   actionLabel="Review & Decide"
                   actionColor="bg-green-600 hover:bg-green-700"
                   emptyMsg="No RFQs pending your review."
                   canEdit={canApprove}
+                  showEditDelete={isMasterAdmin}
+                  isMasterAdmin={isMasterAdmin}
                 />
               </div>
 
@@ -1674,9 +1721,13 @@ export default function RFQ() {
                   <RFQTable
                     rows={approvedToProcessRfqs}
                     onDetail={(rfq) => openModal('detail', rfq)}
+                    onEdit={isMasterAdmin ? (rfq) => openModal('edit', rfq) : undefined}
+                    onDelete={isMasterAdmin ? handleDelete : undefined}
                     onAction={null}
                     emptyMsg=""
                     canEdit={false}
+                    showEditDelete={isMasterAdmin}
+                    isMasterAdmin={isMasterAdmin}
                   />
                 </div>
               )}
@@ -1742,8 +1793,9 @@ export default function RFQ() {
             <Stage1Form
               initial={activeModal.rfq}
               onClose={closeModal}
-              onSave={(form) => {
-                updateRfq(activeModal.rfq.id, { ...form, status: 'Pending Lead', leadNote: '', resubmittedAt: new Date().toISOString().split('T')[0] })
+              isRevise
+              onSave={(form, revisionNote) => {
+                updateRfq(activeModal.rfq.id, { ...form, status: 'Pending Lead', leadNote: '', resubmittedAt: new Date().toISOString().split('T')[0], revisionNote })
                 closeModal()
               }}
             />

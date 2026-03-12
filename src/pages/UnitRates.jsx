@@ -7,7 +7,13 @@ import { exportUnitRates, downloadUnitRateTemplate, parseUnitRatesExcel } from '
 
 const CATEGORIES = ['Mechanical', 'Civil', 'Electrical', 'Instrumentation', 'Insulation', 'Piping', 'Structural', 'Others']
 
-const EMPTY_FORM = { category: 'Mechanical', task: '', unit: '', min: '', max: '', avg: '' }
+const DIFFICULTY_OPTIONS = [
+  { value: 'Easy',   label: 'Easy',   color: 'bg-green-100 text-green-700' },
+  { value: 'Normal', label: 'Normal', color: 'bg-blue-100 text-blue-700' },
+  { value: 'Hard',   label: 'Hard',   color: 'bg-red-100 text-red-700' },
+]
+
+const EMPTY_FORM = { category: 'Mechanical', task: '', unit: '', min: '', max: '', avg: '', difficultyFactor: '', adjustUnitMH: '' }
 
 export default function UnitRates() {
   const { unitRates, addUnitRate, updateUnitRate, deleteUnitRate, currentRole } = useApp()
@@ -63,7 +69,16 @@ export default function UnitRates() {
 
   const openEdit = (row) => {
     setEditTarget(row.id)
-    setForm({ category: row.category, task: row.task, unit: row.unit, min: row.min, max: row.max, avg: row.avg })
+    setForm({
+      category: row.category,
+      task: row.task,
+      unit: row.unit,
+      min: row.min,
+      max: row.max,
+      avg: row.avg,
+      difficultyFactor: row.difficultyFactor ?? '',
+      adjustUnitMH: row.adjustUnitMH ?? '',
+    })
     setErrors({})
     setModalOpen(true)
   }
@@ -80,8 +95,15 @@ export default function UnitRates() {
     return Object.keys(e).length === 0
   }
 
+  const getAdjustMH = (difficulty, min, max, avg) => {
+    if (!difficulty) return null
+    const v = difficulty === 'Easy' ? parseFloat(min) : difficulty === 'Hard' ? parseFloat(max) : parseFloat(avg)
+    return isNaN(v) ? null : v
+  }
+
   const handleSave = () => {
     if (!validate()) return
+    const computedMH = getAdjustMH(form.difficultyFactor, form.min, form.max, form.avg)
     const payload = {
       category: form.category,
       task: form.task.trim(),
@@ -89,6 +111,8 @@ export default function UnitRates() {
       min: parseFloat(form.min),
       max: parseFloat(form.max),
       avg: parseFloat(form.avg),
+      difficultyFactor: form.difficultyFactor || null,
+      adjustUnitMH: computedMH,
     }
     if (editTarget) updateUnitRate(editTarget, payload)
     else addUnitRate(payload)
@@ -239,13 +263,19 @@ export default function UnitRates() {
                 <th className={thCls} onClick={() => toggleSort('avg')}>
                   <span className="flex items-center gap-1">Avg (Normal) <SortIcon k="avg" /></span>
                 </th>
+                <th className={thCls} onClick={() => toggleSort('difficultyFactor')}>
+                  <span className="flex items-center gap-1">Difficulty <SortIcon k="difficultyFactor" /></span>
+                </th>
+                <th className={thCls} onClick={() => toggleSort('adjustUnitMH')}>
+                  <span className="flex items-center gap-1">Adjust MH <SortIcon k="adjustUnitMH" /></span>
+                </th>
                 {canEdit && <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">Actions</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {displayed.length === 0 ? (
                 <tr>
-                  <td colSpan={canEdit ? 7 : 6} className="px-4 py-10 text-center text-slate-400 text-sm">
+                  <td colSpan={canEdit ? 9 : 8} className="px-4 py-10 text-center text-slate-400 text-sm">
                     No records found.
                   </td>
                 </tr>
@@ -259,6 +289,22 @@ export default function UnitRates() {
                   <td className="px-4 py-3 text-slate-700 tabular-nums">{row.min.toFixed(2)}</td>
                   <td className="px-4 py-3 text-slate-700 tabular-nums">{row.max.toFixed(2)}</td>
                   <td className="px-4 py-3 font-semibold text-[#0f2035] tabular-nums">{row.avg.toFixed(2)}</td>
+                  <td className="px-4 py-3">
+                    {row.difficultyFactor
+                      ? <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${
+                          row.difficultyFactor === 'Easy' ? 'bg-green-100 text-green-700' :
+                          row.difficultyFactor === 'Hard' ? 'bg-red-100 text-red-700' :
+                          'bg-blue-100 text-blue-700'
+                        }`}>{row.difficultyFactor}</span>
+                      : <span className="text-slate-300 text-xs">—</span>}
+                  </td>
+                  <td className={`px-4 py-3 font-semibold tabular-nums ${
+                    row.difficultyFactor === 'Easy' ? 'text-green-700' :
+                    row.difficultyFactor === 'Hard' ? 'text-red-700' :
+                    row.difficultyFactor === 'Normal' ? 'text-blue-700' : 'text-slate-400'
+                  }`}>
+                    {row.adjustUnitMH != null ? row.adjustUnitMH.toFixed(2) : <span className="text-slate-300">—</span>}
+                  </td>
                   {canEdit && (
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-2">
@@ -312,6 +358,50 @@ export default function UnitRates() {
             {field('min', 'Min / Easy (MH)', 'number', { min: 0, step: 0.01, placeholder: '0.00' })}
             {field('max', 'Max / Hard (MH)', 'number', { min: 0, step: 0.01, placeholder: '0.00' })}
             {field('avg', 'Avg / Normal (MH)', 'number', { min: 0, step: 0.01, placeholder: '0.00' })}
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">Difficulty Factor</label>
+              <select
+                value={form.difficultyFactor}
+                onChange={e => setForm(p => ({ ...p, difficultyFactor: e.target.value }))}
+                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-200 bg-white"
+              >
+                <option value="">— Select —</option>
+                {DIFFICULTY_OPTIONS.map(d => (
+                  <option key={d.value} value={d.value}>{d.label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">
+                Adjust Unit MH
+                {form.difficultyFactor && (
+                  <span className="ml-1.5 text-[11px] font-normal text-slate-400">
+                    ({form.difficultyFactor === 'Easy' ? 'uses Min' : form.difficultyFactor === 'Hard' ? 'uses Max' : 'uses Avg'})
+                  </span>
+                )}
+              </label>
+              <input
+                type="number"
+                readOnly
+                value={(() => {
+                  const v = getAdjustMH(form.difficultyFactor, form.min, form.max, form.avg)
+                  return v != null ? v : ''
+                })()}
+                placeholder="auto"
+                className="w-full px-3 py-2 text-sm border rounded-lg outline-none bg-slate-50 border-slate-200 text-slate-500 cursor-not-allowed"
+              />
+              {form.difficultyFactor && (
+                <p className={`text-[11px] mt-1 ${
+                  form.difficultyFactor === 'Easy' ? 'text-green-600' :
+                  form.difficultyFactor === 'Hard' ? 'text-red-600' : 'text-blue-600'
+                }`}>
+                  Auto-filled from {form.difficultyFactor === 'Easy' ? 'Min' : form.difficultyFactor === 'Hard' ? 'Max' : 'Avg'} value
+                </p>
+              )}
+            </div>
           </div>
 
           <div className="flex justify-end gap-3 pt-2 border-t border-slate-100">
