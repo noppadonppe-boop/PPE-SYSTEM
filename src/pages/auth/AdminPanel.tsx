@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { collection, onSnapshot } from 'firebase/firestore'
 import { db } from '../../firebase/firebaseAuth'
-import { updateUserStatus, updateUserRoles } from '../../firebase/authService'
+import { updateUserStatus, updateUserRoles, updateUserPosition } from '../../firebase/authService'
 import { useAuth } from '../../context/AuthContext'
 import { USER_ROLES, type UserProfile, type UserRole } from '../../types/auth'
 import {
@@ -11,6 +11,18 @@ import {
 
 const APP_NAME = 'PPE System'
 const ROOT_DOC = 'root'
+
+const POSITIONS = [
+  'Manager',
+  'Leader',
+  'GM/MD',
+  'Senior Architect',
+  'Architect',
+  'Senior Civil Engineer',
+  'Civil Engineer',
+  'Draft Man',
+  'Document Control',
+]
 
 const ROLE_LABELS: Record<string, string> = {
   'Requestor':   'Requestor',
@@ -81,6 +93,12 @@ export default function AdminPanel() {
     setBusy(p => ({ ...p, [`role-${user.uid}`]: true }))
     try { await updateUserRoles(user.uid, next) }
     finally { setBusy(p => ({ ...p, [`role-${user.uid}`]: false })) }
+  }
+
+  async function handlePositionChange(uid: string, position: string) {
+    setBusy(p => ({ ...p, [`pos-${uid}`]: true }))
+    try { await updateUserPosition(uid, position) }
+    finally { setBusy(p => ({ ...p, [`pos-${uid}`]: false })) }
   }
 
   return (
@@ -168,9 +186,11 @@ export default function AdminPanel() {
                     isMe={me?.uid === u.uid}
                     busy={!!busy[u.uid]}
                     roleBusy={!!busy[`role-${u.uid}`]}
+                    posBusy={!!busy[`pos-${u.uid}`]}
                     onApprove={() => handleStatus(u.uid, 'approved')}
                     onReject={() => handleStatus(u.uid, 'rejected')}
                     onRoleToggle={(role) => handleRoleToggle(u, role)}
+                    onPositionChange={(pos) => handlePositionChange(u.uid, pos)}
                   />
                 ))}
               </tbody>
@@ -184,15 +204,17 @@ export default function AdminPanel() {
 
 // ─── User row sub-component ───────────────────────────────────────────────────
 function UserRow({
-  user, isMe, busy, roleBusy, onApprove, onReject, onRoleToggle,
+  user, isMe, busy, roleBusy, posBusy, onApprove, onReject, onRoleToggle, onPositionChange,
 }: {
   user: UserProfile
   isMe: boolean
   busy: boolean
   roleBusy: boolean
+  posBusy: boolean
   onApprove: () => void
   onReject: () => void
   onRoleToggle: (role: UserRole) => void
+  onPositionChange: (pos: string) => void
 }) {
   const [roleOpen, setRoleOpen] = useState(false)
   const sc = STATUS_CONFIG[user.status]
@@ -217,8 +239,18 @@ function UserRow({
       </td>
 
       {/* Position */}
-      <td className="px-4 py-3 text-xs text-slate-600 font-sarabun">
-        {user.position || '—'}
+      <td className="px-4 py-3">
+        <select
+          value={user.position || ''}
+          onChange={e => onPositionChange(e.target.value)}
+          disabled={posBusy}
+          className="text-xs border border-slate-200 rounded-lg px-2 py-1.5 outline-none focus:border-blue-400 bg-white font-sarabun disabled:opacity-50 min-w-[160px] cursor-pointer hover:border-slate-300"
+        >
+          <option value="">— เลือกตำแหน่ง —</option>
+          {POSITIONS.map(p => (
+            <option key={p} value={p}>{p}</option>
+          ))}
+        </select>
       </td>
 
       {/* Status badge */}

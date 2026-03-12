@@ -15,6 +15,18 @@ function errMsg(code: string) {
   return FIREBASE_MSG[code] ?? `เกิดข้อผิดพลาด (${code})`
 }
 
+const POSITIONS = [
+  'Manager',
+  'Leader',
+  'GM/MD',
+  'Senior Architect',
+  'Architect',
+  'Senior Civil Engineer',
+  'Civil Engineer',
+  'Draft Man',
+  'Document Control',
+]
+
 export default function RegisterPage() {
   const { firebaseUser, userProfile, loading, refreshProfile } = useAuth()
   const navigate = useNavigate()
@@ -26,7 +38,7 @@ export default function RegisterPage() {
   const [error,   setError]   = useState('')
   const [busy,    setBusy]    = useState(false)
 
-  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement>) =>
+  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
     setForm(p => ({ ...p, [k]: e.target.value }))
 
   useEffect(() => {
@@ -110,10 +122,12 @@ export default function RegisterPage() {
             <div>
               <label className="block text-xs font-semibold text-slate-600 mb-1 font-sarabun">ตำแหน่ง</label>
               <div className="relative">
-                <Briefcase size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                <input required type="text" value={form.position} onChange={set('position')}
-                  placeholder="เช่น Engineer, Drafter"
-                  className="w-full pl-8 pr-3 py-2.5 text-sm border border-slate-300 rounded-lg outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-200 font-sarabun" />
+                <Briefcase size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+                <select required value={form.position} onChange={set('position')}
+                  className="w-full pl-8 pr-3 py-2.5 text-sm border border-slate-300 rounded-lg outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-200 font-sarabun bg-white appearance-none">
+                  <option value="">— เลือกตำแหน่ง —</option>
+                  {POSITIONS.map(p => <option key={p} value={p}>{p}</option>)}
+                </select>
               </div>
             </div>
 

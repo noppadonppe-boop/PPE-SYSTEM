@@ -88,7 +88,7 @@ async function createUserProfile(
     firstName:        extra.firstName,
     lastName:         extra.lastName,
     position:         extra.position,
-    role:             isFirstUser ? ['MasterAdmin', 'ppeAdmin'] : ['Staff'],
+    role:             isFirstUser ? ['MasterAdmin', 'ppeAdmin'] : ['Requestor'],
     status:           isFirstUser ? 'approved' : 'pending',
     assignedProjects: [],
     createdAt:        Timestamp.now(),
@@ -172,4 +172,11 @@ export async function updateUserRoles(
   roles: UserProfile['role']
 ): Promise<void> {
   await updateDoc(userDocRef(targetUid), { role: roles })
+}
+
+export async function updateUserPosition(
+  targetUid: string,
+  position: string
+): Promise<void> {
+  await updateDoc(userDocRef(targetUid), { position })
 }

@@ -18,7 +18,9 @@ const POSITIONS = [
 
 const ALLOWED_ROLES = ['ppeLead', 'ppeManager', 'ppeAdmin', 'MasterAdmin', 'GM/MD']
 
-const EMPTY_FORM = { name: '', position: 'Engineer', ratePerHour: '' }
+const ADJUST_FACTORS = [1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0]
+
+const EMPTY_FORM = { name: '', position: 'Engineer', budgetaryRate: '', adjustRateFactor: '', ratePerHour: '' }
 
 function formatIDR(value) {
   if (value === null || value === undefined || value === '') return '—'
@@ -130,7 +132,13 @@ export default function TeamRates() {
 
   const openEdit = (row) => {
     setEditTarget(row.id)
-    setForm({ name: row.name, position: row.position, ratePerHour: row.ratePerHour })
+    setForm({
+      name: row.name,
+      position: row.position,
+      budgetaryRate: row.budgetaryRate ?? '',
+      adjustRateFactor: row.adjustRateFactor ?? '',
+      ratePerHour: row.ratePerHour,
+    })
     setErrors({})
     setModalOpen(true)
   }
@@ -138,7 +146,10 @@ export default function TeamRates() {
   const validate = () => {
     const e = {}
     if (!form.name.trim()) e.name = 'Name is required'
-    if (form.ratePerHour === '' || isNaN(form.ratePerHour) || Number(form.ratePerHour) <= 0)
+    if (form.budgetaryRate !== '' && (isNaN(form.budgetaryRate) || Number(form.budgetaryRate) < 0))
+      e.budgetaryRate = 'Must be a valid number (≥ 0)'
+    const hasAutoCalc = form.budgetaryRate && form.adjustRateFactor
+    if (!hasAutoCalc && (form.ratePerHour === '' || isNaN(form.ratePerHour) || Number(form.ratePerHour) <= 0))
       e.ratePerHour = 'Valid rate required (> 0)'
     setErrors(e)
     return Object.keys(e).length === 0
@@ -146,10 +157,17 @@ export default function TeamRates() {
 
   const handleSave = () => {
     if (!validate()) return
+    const bRate = form.budgetaryRate !== '' ? parseInt(form.budgetaryRate, 10) : null
+    const factor = form.adjustRateFactor !== '' ? parseFloat(form.adjustRateFactor) : null
+    const computedRate = bRate != null && factor != null
+      ? Math.round(bRate * factor)
+      : parseInt(form.ratePerHour, 10)
     const payload = {
       name: form.name.trim(),
       position: form.position,
-      ratePerHour: parseInt(form.ratePerHour, 10),
+      budgetaryRate: bRate,
+      adjustRateFactor: factor,
+      ratePerHour: computedRate,
     }
     if (editTarget) updateTeamRate(editTarget, payload)
     else addTeamRate(payload)
@@ -278,6 +296,12 @@ export default function TeamRates() {
                 <th className={thCls} onClick={() => toggleSort('position')}>
                   <span className="flex items-center gap-1">Position <SortIcon k="position" /></span>
                 </th>
+                <th className={thCls} onClick={() => toggleSort('budgetaryRate')}>
+                  <span className="flex items-center gap-1">Budgetary Rate <SortIcon k="budgetaryRate" /></span>
+                </th>
+                <th className={thCls} onClick={() => toggleSort('adjustRateFactor')}>
+                  <span className="flex items-center gap-1">Factor <SortIcon k="adjustRateFactor" /></span>
+                </th>
                 <th className={thCls} onClick={() => toggleSort('ratePerHour')}>
                   <span className="flex items-center gap-1">Rate / Hour (THB) <SortIcon k="ratePerHour" /></span>
                 </th>
@@ -287,7 +311,7 @@ export default function TeamRates() {
             <tbody className="divide-y divide-slate-100">
               {displayed.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="px-4 py-10 text-center text-slate-400 text-sm">
+                  <td colSpan={7} className="px-4 py-10 text-center text-slate-400 text-sm">
                     No records found.
                   </td>
                 </tr>
@@ -304,6 +328,14 @@ export default function TeamRates() {
                   </td>
                   <td className="px-4 py-3">
                     <span className="px-2 py-0.5 rounded-md text-xs font-medium bg-slate-100 text-slate-600">{row.position}</span>
+                  </td>
+                  <td className="px-4 py-3 font-semibold text-blue-700 tabular-nums">
+                    {row.budgetaryRate != null ? formatIDR(row.budgetaryRate) : '—'}
+                  </td>
+                  <td className="px-4 py-3">
+                    {row.adjustRateFactor != null
+                      ? <span className="px-2 py-0.5 rounded-md text-xs font-semibold bg-amber-100 text-amber-700">&times; {parseFloat(row.adjustRateFactor).toFixed(1)}</span>
+                      : <span className="text-slate-400 text-xs">—</span>}
                   </td>
                   <td className="px-4 py-3 font-semibold text-green-700 tabular-nums">
                     {formatIDR(row.ratePerHour)}
@@ -355,7 +387,49 @@ export default function TeamRates() {
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-600 mb-1">Rate per Hour (THB)</label>
+            <label className="block text-xs font-semibold text-slate-600 mb-1">Budgetary Rate (Rate/hour)</label>
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm font-medium">฿</span>
+              <input
+                type="number"
+                min="0"
+                step="1000"
+                placeholder="e.g. 75000"
+                value={form.budgetaryRate}
+                onChange={e => setForm(p => ({ ...p, budgetaryRate: e.target.value }))}
+                className={`w-full pl-9 pr-3 py-2 text-sm border rounded-lg outline-none transition-colors ${
+                  errors.budgetaryRate ? 'border-red-400 bg-red-50' : 'border-slate-300 focus:border-blue-500 focus:ring-1 focus:ring-blue-200'
+                }`}
+              />
+            </div>
+            {errors.budgetaryRate && <p className="text-xs text-red-500 mt-1">{errors.budgetaryRate}</p>}
+            {form.budgetaryRate && !errors.budgetaryRate && (
+              <p className="text-xs text-slate-400 mt-1">{formatIDR(Number(form.budgetaryRate))}</p>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 mb-1">Adjust Rate Factor</label>
+            <select
+              value={form.adjustRateFactor}
+              onChange={e => setForm(p => ({ ...p, adjustRateFactor: e.target.value }))}
+              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-200 bg-white"
+            >
+              <option value="">— Select Factor —</option>
+              {ADJUST_FACTORS.map(f => (
+                <option key={f} value={f}>× {f.toFixed(1)}</option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 mb-1">Rate / Hour (THB)
+              {form.budgetaryRate && form.adjustRateFactor && (
+                <span className="ml-2 text-blue-500 font-normal text-[11px]">
+                  = {formatIDR(Number(form.budgetaryRate))} × {parseFloat(form.adjustRateFactor).toFixed(1)} (auto-calculated)
+                </span>
+              )}
+            </label>
             <div className="relative">
               <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 text-sm font-medium">฿</span>
               <input
@@ -363,16 +437,28 @@ export default function TeamRates() {
                 min="0"
                 step="1000"
                 placeholder="e.g. 85000"
-                value={form.ratePerHour}
-                onChange={e => setForm(p => ({ ...p, ratePerHour: e.target.value }))}
+                value={
+                  form.budgetaryRate && form.adjustRateFactor
+                    ? Math.round(Number(form.budgetaryRate) * parseFloat(form.adjustRateFactor))
+                    : form.ratePerHour
+                }
+                onChange={e => {
+                  if (!form.budgetaryRate || !form.adjustRateFactor)
+                    setForm(p => ({ ...p, ratePerHour: e.target.value }))
+                }}
+                readOnly={!!(form.budgetaryRate && form.adjustRateFactor)}
                 className={`w-full pl-9 pr-3 py-2 text-sm border rounded-lg outline-none transition-colors ${
-                  errors.ratePerHour ? 'border-red-400 bg-red-50' : 'border-slate-300 focus:border-blue-500 focus:ring-1 focus:ring-blue-200'
+                  form.budgetaryRate && form.adjustRateFactor
+                    ? 'bg-blue-50 border-blue-200 text-blue-700 font-semibold cursor-not-allowed'
+                    : errors.ratePerHour
+                      ? 'border-red-400 bg-red-50'
+                      : 'border-slate-300 focus:border-blue-500 focus:ring-1 focus:ring-blue-200'
                 }`}
               />
             </div>
             {errors.ratePerHour && <p className="text-xs text-red-500 mt-1">{errors.ratePerHour}</p>}
-            {form.ratePerHour && !errors.ratePerHour && (
-              <p className="text-xs text-slate-400 mt-1">{formatIDR(Number(form.ratePerHour))}</p>
+            {form.budgetaryRate && form.adjustRateFactor && (
+              <p className="text-xs text-blue-500 mt-1">Auto-calculated from Budgetary Rate × Factor</p>
             )}
           </div>
 
