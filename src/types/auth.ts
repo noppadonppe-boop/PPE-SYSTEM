@@ -1,17 +1,12 @@
 import { Timestamp } from 'firebase/firestore'
 
 export const USER_ROLES = [
-  'Staff',
-  'ppeTeam',
-  'ppeLeader',
+  'Requestor',
+  'ppeLead',
   'ppeManager',
-  'Requestors',
-  'Eng',
-  'SenEng',
-  'Arch',
-  'SenArch',
+  'ppeTeam',
   'ppeAdmin',
-  'MasterAdmin',
+  'GM/MD',
 ] as const
 
 export type UserRole = typeof USER_ROLES[number]

@@ -12,6 +12,15 @@ import {
 const APP_NAME = 'PPE System'
 const ROOT_DOC = 'root'
 
+const ROLE_LABELS: Record<string, string> = {
+  'Requestor':  'Requestor',
+  'ppeLead':    'ppeLead',
+  'ppeManager': 'ppeManager',
+  'ppeTeam':    'ppeTeam',
+  'ppeAdmin':   'ppeAdmin',
+  'GM/MD':      'GM/MD',
+}
+
 const STATUS_CONFIG = {
   approved: { label: 'อนุมัติแล้ว', cls: 'bg-green-100 text-green-700' },
   pending:  { label: 'รอการอนุมัติ', cls: 'bg-yellow-100 text-yellow-700' },
@@ -231,7 +240,7 @@ function UserRow({
               : null
             }
             <span className="max-w-[140px] truncate">
-              {(user.role ?? []).length === 0 ? 'ไม่มีบทบาท' : (user.role ?? []).join(', ')}
+              {(user.role ?? []).length === 0 ? 'ไม่มีบทบาท' : (user.role ?? []).map(r => ROLE_LABELS[r] ?? r).join(', ')}
             </span>
             <ChevronDown size={11} className="text-slate-400 flex-shrink-0" />
           </button>
@@ -245,7 +254,7 @@ function UserRow({
                     onClick={() => { onRoleToggle(role); }}
                     className="w-full flex items-center justify-between px-3 py-2 text-xs hover:bg-slate-50 transition-colors font-sarabun"
                   >
-                    <span className={active ? 'font-bold text-blue-700' : 'text-slate-700'}>{role}</span>
+                    <span className={active ? 'font-bold text-blue-700' : 'text-slate-700'}>{ROLE_LABELS[role] ?? role}</span>
                     {active && <CheckCircle size={12} className="text-blue-500 flex-shrink-0" />}
                   </button>
                 )

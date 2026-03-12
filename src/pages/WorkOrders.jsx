@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react'
 import {
-  Plus, Pencil, Eye, Search, CalendarDays, Users,
-  CheckCircle, Clock, XCircle, PlayCircle, AlertTriangle,
+  Plus, Pencil, Eye, Search, CalendarDays,
+  CheckCircle, PlayCircle, AlertTriangle, Rocket,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import Modal from '../components/ui/Modal'
@@ -178,22 +178,91 @@ function WODetailModal({ wo, dailyReports, teamRates, onClose }) {
   )
 }
 
+// ── Work Progress Report Modal ───────────────────────────────────────────────
+
+function WorkProgressModal({ wo, onClose }) {
+  const activityRows = wo.mheRows || wo.wbsItems || []
+
+  return (
+    <div className="px-6 py-5 space-y-4 max-h-[80vh] overflow-y-auto">
+      {/* Header info */}
+      <div className="grid grid-cols-3 gap-3">
+        <div className="bg-slate-50 rounded-xl border border-slate-200 p-3 text-center">
+          <p className="text-lg font-bold text-[#0f2035]">{wo.requestWorkNo}</p>
+          <p className="text-[10px] text-slate-500 mt-0.5">Work No.</p>
+        </div>
+        <div className="bg-slate-50 rounded-xl border border-slate-200 p-3 text-center">
+          <p className="text-lg font-bold text-[#0f2035]">{wo.totalPlannedMH || 0} MH</p>
+          <p className="text-[10px] text-slate-500 mt-0.5">Total Planned MH</p>
+        </div>
+        <div className="bg-blue-50 rounded-xl border border-blue-200 p-3 text-center">
+          <p className="text-lg font-bold text-blue-700">{wo.planStart || '—'} → {wo.planFinish || '—'}</p>
+          <p className="text-[10px] text-slate-500 mt-0.5">Schedule</p>
+        </div>
+      </div>
+
+      {/* Work Progress Report Table */}
+      <div className="rounded-xl border border-cyan-300 overflow-hidden">
+        <div className="bg-cyan-400 px-4 py-2">
+          <p className="text-sm font-bold text-white">Work Progress Report</p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="bg-cyan-300">
+                {['Item','Activity Name','Total Manhour','Assign Engineer','Today Progress','Previously Progress','Progress Upto Date','Note'].map(h => (
+                  <th key={h} className="px-3 py-2 text-left font-semibold text-slate-700 whitespace-nowrap border-r border-cyan-400 last:border-r-0">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {activityRows.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="px-4 py-6 text-center text-slate-400">No activity rows found in Manhour Estimate.</td>
+                </tr>
+              ) : activityRows.map((row, i) => (
+                <tr key={row.id || i} className="border-t border-cyan-200 bg-cyan-50 hover:bg-cyan-100 transition-colors">
+                  <td className="px-3 py-2 text-slate-500 border-r border-cyan-200">{i + 1}</td>
+                  <td className="px-3 py-2 font-medium text-slate-800 border-r border-cyan-200 whitespace-nowrap">{row.activityName || row.task || '—'}</td>
+                  <td className="px-3 py-2 text-right tabular-nums border-r border-cyan-200">{row.totalMH || 0}</td>
+                  <td className="px-3 py-2 border-r border-cyan-200">{row.assignEngineer || '—'}</td>
+                  <td className="px-3 py-2 text-right border-r border-cyan-200">—</td>
+                  <td className="px-3 py-2 text-right border-r border-cyan-200">—</td>
+                  <td className="px-3 py-2 text-right border-r border-cyan-200">—</td>
+                  <td className="px-3 py-2">—</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="flex justify-end pt-2 border-t border-slate-100">
+        <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg">Close</button>
+      </div>
+    </div>
+  )
+}
+
 // ── Main WorkOrders Page ──────────────────────────────────────────────────────
 
 export default function WorkOrders() {
   const { rfqs, workOrders, addWorkOrder, updateWorkOrder, dailyReports, teamRates, currentRole } = useApp()
 
-  const [search, setSearch]         = useState('')
+  const [search, setSearch]             = useState('')
   const [filterStatus, setFilterStatus] = useState('All')
   const [activeModal, setActiveModal]   = useState(null) // { type, wo }
 
-  const canSchedule = ['ppeLead', 'ppeManager', 'ppeAdmin'].includes(currentRole)
+  const canActivate = ['ppeLead', 'ppeManager', 'ppeAdmin', 'GM/MD'].includes(currentRole)
 
-  // Auto-create work orders from newly Approved RFQs that don't yet have a WO
+  // Approved RFQs (either 'Approved' or 'Approved to Process') that don't yet have a WO
   const existingRfqIds = useMemo(() => new Set(workOrders.map(w => w.rfqId)), [workOrders])
 
   const pendingWOs = useMemo(() =>
-    rfqs.filter(r => r.status === 'Approved' && !existingRfqIds.has(r.id)),
+    rfqs.filter(r =>
+      ['Approved', 'Approved to Process'].includes(r.status) &&
+      !existingRfqIds.has(r.id)
+    ),
   [rfqs, existingRfqIds])
 
   const displayed = useMemo(() => {
@@ -236,13 +305,13 @@ export default function WorkOrders() {
         </div>
       </div>
 
-      {/* Approved RFQs awaiting WO creation */}
-      {pendingWOs.length > 0 && canSchedule && (
+      {/* Approved RFQs awaiting WO creation — visible to activators only */}
+      {pendingWOs.length > 0 && canActivate && (
         <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4">
           <div className="flex items-center gap-2 mb-3">
             <AlertTriangle size={16} className="text-yellow-600" />
             <p className="text-sm font-semibold text-yellow-800">
-              {pendingWOs.length} Approved RFQ{pendingWOs.length > 1 ? 's' : ''} awaiting work order creation
+              {pendingWOs.length} Approved RFQ{pendingWOs.length > 1 ? 's' : ''} ready to activate for Work Execution
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -250,19 +319,23 @@ export default function WorkOrders() {
               <button key={rfq.id}
                 onClick={() => {
                   const newWo = {
-                    rfqId: rfq.id,
-                    requestWorkNo: rfq.requestWorkNo,
-                    client: rfq.client,
-                    planStart: '',
-                    planFinish: '',
-                    status: 'Pending Schedule',
-                    assignedTeam: rfq.assignedEngineers || [],
-                    totalPlannedMH: rfq.totalPlannedMH,
+                    rfqId:          rfq.id,
+                    requestWorkNo:  rfq.requestWorkNo,
+                    client:         rfq.client,
+                    planStart:      '',
+                    planFinish:     '',
+                    status:         'Pending Schedule',
+                    assignedTeam:   rfq.assignedEngineers || [],
+                    totalPlannedMH: rfq.totalPlannedMH || 0,
+                    mheRows:        rfq.mheRows        || [],
+                    wbsItems:       rfq.wbsItems       || [],
+                    mheNo:          rfq.mheNo          || '',
+                    totalCost:      rfq.totalCost      || 0,
                   }
                   addWorkOrder(newWo)
                 }}
                 className="flex items-center gap-2 px-3 py-1.5 bg-yellow-600 hover:bg-yellow-700 text-white text-xs font-semibold rounded-lg transition-colors">
-                <Plus size={13} /> Create WO: {rfq.requestWorkNo}
+                <Plus size={13} /> Activate WO: {rfq.requestWorkNo}
               </button>
             ))}
           </div>
@@ -354,26 +427,27 @@ export default function WorkOrders() {
                     <td className="px-4 py-3"><StatusBadge status={wo.status} /></td>
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-2">
-                        {canSchedule && wo.status === 'Pending Schedule' && (
+                        {canActivate && wo.status === 'Pending Schedule' && (
                           <button onClick={() => openModal('schedule', wo)}
-                            className="px-3 py-1.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors flex items-center gap-1">
-                            <CalendarDays size={12} /> Set Schedule
+                            className="px-3 py-1.5 text-xs font-semibold text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors flex items-center gap-1">
+                            <Rocket size={12} /> Start Work
                           </button>
                         )}
-                        {canSchedule && wo.status === 'Ongoing' && (
+                        {canActivate && wo.status === 'Ongoing' && (
                           <button onClick={() => openModal('schedule', wo)}
                             className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors" title="Edit Schedule">
                             <Pencil size={15} />
                           </button>
                         )}
-                        {canSchedule && wo.status === 'Ongoing' && (
+                        {canActivate && wo.status === 'Ongoing' && (
                           <button onClick={() => updateWorkOrder(wo.id, { status: 'Completed' })}
                             className="p-1.5 rounded-lg text-slate-400 hover:text-green-600 hover:bg-green-50 transition-colors" title="Mark Complete">
                             <CheckCircle size={15} />
                           </button>
                         )}
-                        <button onClick={() => openModal('detail', wo)}
-                          className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors" title="View Details">
+                        <button onClick={() => openModal('progress', wo)}
+                          title="Work Progress Report"
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-cyan-600 hover:bg-cyan-50 transition-colors">
                           <Eye size={15} />
                         </button>
                       </div>
@@ -386,12 +460,20 @@ export default function WorkOrders() {
         </div>
       </div>
 
-      {/* Schedule Modal */}
+      {/* Schedule / Start Work Modal */}
       <Modal isOpen={activeModal?.type === 'schedule'} onClose={closeModal}
-        title={`Set Schedule — ${activeModal?.wo?.requestWorkNo || ''}`} size="sm">
+        title={`Start Work — ${activeModal?.wo?.requestWorkNo || ''}`} size="sm">
         {activeModal?.wo && (
           <ScheduleModal wo={activeModal.wo} onClose={closeModal}
             onSave={(data) => { updateWorkOrder(activeModal.wo.id, data); closeModal() }} />
+        )}
+      </Modal>
+
+      {/* Work Progress Report Modal */}
+      <Modal isOpen={activeModal?.type === 'progress'} onClose={closeModal}
+        title={`Work Progress Report — ${activeModal?.wo?.requestWorkNo || ''}`} size="xl">
+        {activeModal?.wo && (
+          <WorkProgressModal wo={activeModal.wo} onClose={closeModal} />
         )}
       </Modal>
 

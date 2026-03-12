@@ -1,8 +1,9 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useRef } from 'react'
 import {
   Plus, Eye, Search, Trash2, CheckCircle, XCircle, ArrowRight,
   Calculator, Users, DollarSign, ClipboardList, FileText,
   ChevronRight, InboxIcon, ClipboardCheck, BadgeCheck,
+  Pencil, Link2, Upload, Image, MessageSquare,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import Modal from '../components/ui/Modal'
@@ -28,11 +29,11 @@ const URGENCY_CLS = {
 const STAGES = ['Request', 'Lead Review', 'Manhour Plan', 'Cost Estimate', 'Approval']
 
 function stageName(status) {
-  if (['Pending Lead', 'Returned'].includes(status)) return 0
-  if (['Pending MH'].includes(status))               return 1
-  if (['Pending Manager'].includes(status))          return 2
-  if (['Pending Approval'].includes(status))         return 3
-  if (['Approved', 'Rejected', 'Cancelled'].includes(status)) return 4
+  if (['Pending Lead', 'Returned', 'Need Clarify'].includes(status)) return 0
+  if (['Pending MH'].includes(status))                               return 1
+  if (['Pending Manager'].includes(status))                          return 2
+  if (['Pending Approval'].includes(status))                         return 3
+  if (['Approved to Process', 'Approved', 'Rejected', 'Cancelled'].includes(status)) return 4
   return -1
 }
 
@@ -154,24 +155,65 @@ function LeadReceiveForm({ rfq, onAccept, onReturn, onClose }) {
   )
 }
 
+// ─── File Upload Field ────────────────────────────────────────────────────────
+
+function FileUploadField({ label, accept, icon, names = [], onChange, isImage }) {
+  const ref = useRef(null)
+  const handleFiles = (e) => {
+    const files = Array.from(e.target.files)
+    const newNames = files.map(f => f.name)
+    onChange([...names, ...newNames])
+    e.target.value = ''
+  }
+  const remove = (i) => onChange(names.filter((_, idx) => idx !== i))
+  return (
+    <div>
+      <label className="block text-xs font-semibold text-slate-600 mb-1 flex items-center gap-1">
+        {icon} {label}
+      </label>
+      <div
+        onClick={() => ref.current?.click()}
+        className="cursor-pointer border-2 border-dashed border-slate-300 hover:border-blue-400 rounded-lg px-3 py-3 text-center transition-colors bg-slate-50 hover:bg-blue-50"
+      >
+        <p className="text-xs text-slate-400">{isImage ? 'Click to add photos' : 'Click to attach files'}</p>
+        <p className="text-[10px] text-slate-300 mt-0.5">{accept.replace(/\./g, '').toUpperCase()}</p>
+      </div>
+      <input ref={ref} type="file" accept={accept} multiple className="hidden" onChange={handleFiles} />
+      {names.length > 0 && (
+        <ul className="mt-2 space-y-1">
+          {names.map((n, i) => (
+            <li key={i} className="flex items-center justify-between bg-white border border-slate-200 rounded-lg px-2 py-1 text-xs">
+              <span className="truncate text-slate-700 max-w-[140px]" title={n}>{isImage ? '🖼 ' : '📎 '}{n}</span>
+              <button onClick={() => remove(i)} className="ml-2 text-slate-400 hover:text-red-500 flex-shrink-0"><XCircle size={13} /></button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 // ─── Stage 1: Request Form ────────────────────────────────────────────────────
 
 const SERVICE_TYPE_PREFIX = { CMG: 'RQ-CMG-J', PPE: 'RQ-PPE-EJ', Other: 'RQ-Gen-J' }
 
 const EMPTY_RFQ_FORM = {
-  dateRequest:  new Date().toISOString().split('T')[0],
-  serviceType:  'CMG',
-  requestWorkNo: '',
-  requestor:    '',
-  emailRequestor:'',
-  tel:          '',
-  projectNo:    '',
-  client:       '',
-  urgency:      'Normal',
-  s1Location:   'ภายในพื้นที่ผู้ว่าจ้าง',
-  s2WorkType:   'โครงการใหม่',
-  s3WorkKind:   '',
-  details:      '',
+  dateRequest:    new Date().toISOString().split('T')[0],
+  serviceType:    'CMG',
+  requestWorkNo:  '',
+  requestor:      '',
+  emailRequestor: '',
+  tel:            '',
+  projectNo:      '',
+  client:         '',
+  urgency:        'Normal',
+  s1Location:     'ภายในพื้นที่ผู้ว่าจ้าง',
+  s2WorkType:     'โครงการใหม่',
+  s3WorkKind:     '',
+  details:        '',
+  linkUrl:        '',
+  attachmentNames: [],
+  photoNames:     [],
 }
 
 function Stage1Form({ onSave, onClose, initial }) {
@@ -363,6 +405,47 @@ function Stage1Form({ onSave, onClose, initial }) {
         />
       </div>
 
+      {/* Divider */}
+      <div className="border-t border-slate-100 pt-1">
+        <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Attachments & References</p>
+      </div>
+
+      {/* Row 9: Link URL */}
+      <div>
+        <Label text="Reference / Drawing URL" />
+        <div className="relative">
+          <Link2 size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+          <input value={form.linkUrl} onChange={e => set('linkUrl', e.target.value)}
+            placeholder="https://drive.google.com/… or SharePoint link"
+            className="w-full pl-9 pr-3 py-2 text-sm border border-slate-300 rounded-lg outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-200" />
+        </div>
+        {form.linkUrl && (
+          <a href={form.linkUrl} target="_blank" rel="noopener noreferrer"
+            className="text-xs text-blue-600 hover:underline mt-1 inline-block">Open link ↗</a>
+        )}
+      </div>
+
+      {/* Row 10: File Upload + Photo Upload side by side */}
+      <div className="grid grid-cols-2 gap-4">
+        {/* File Upload */}
+        <FileUploadField
+          label="Upload Documents / Files"
+          accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.zip"
+          icon={<Upload size={14} />}
+          names={form.attachmentNames}
+          onChange={names => set('attachmentNames', names)}
+        />
+        {/* Photo Upload */}
+        <FileUploadField
+          label="Upload Photos / Images"
+          accept="image/*"
+          icon={<Image size={14} />}
+          names={form.photoNames}
+          onChange={names => set('photoNames', names)}
+          isImage
+        />
+      </div>
+
       <div className="flex justify-end gap-3 pt-2 border-t border-slate-100">
         <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg">Cancel</button>
         <button onClick={() => validate() && onSave(form)}
@@ -374,159 +457,171 @@ function Stage1Form({ onSave, onClose, initial }) {
   )
 }
 
-// ─── Stage 2: Manhour Plan (ppeLead) ─────────────────────────────────────────
+// ─── Stage 2: Manhour Estimate (ppeLead) ─────────────────────────────────────
+
+const MHE_TYPES = ['Drawing', 'Calculation', 'Estimation', 'Service Eng.', '3D Model', 'Revit Model', 'Other']
+
+function genMheNo(rfq) {
+  const base = (rfq.requestWorkNo || 'RQ').replace('RQ-', 'MHE-')
+  return base
+}
+
+const EMPTY_MHE_ROW = { activityName: '', type: 'Drawing', additionalInfo: '', qty: '', unitMH: '', assignEngineer: '', note: '' }
 
 function Stage2Form({ rfq, onSave, onClose }) {
-  const { unitRates, teamRates } = useApp()
-  const [wbsItems, setWbsItems] = useState(rfq.wbsItems || [])
-  const [assigned, setAssigned] = useState(rfq.assignedEngineers || [])
-  const [addRow, setAddRow]     = useState({ unitRateId: '', qty: '', difficulty: 'avg' })
-
-  const totalMH = wbsItems.reduce((s, w) => s + w.totalMH, 0)
-
-  const selectedUR = unitRates.find(r => r.id === addRow.unitRateId)
-
-  const addWbs = () => {
-    if (!addRow.unitRateId || !addRow.qty || Number(addRow.qty) <= 0) return
-    const ur  = unitRates.find(r => r.id === addRow.unitRateId)
-    const mhPerUnit = addRow.difficulty === 'min' ? ur.min : addRow.difficulty === 'max' ? ur.max : ur.avg
-    const qty = parseFloat(addRow.qty)
-    setWbsItems(prev => [...prev, {
-      id: `wbs-${Date.now()}`,
-      task: ur.task, unit: ur.unit,
-      qty, difficulty: addRow.difficulty,
-      unitMH: mhPerUnit, totalMH: +(mhPerUnit * qty).toFixed(2),
-    }])
-    setAddRow({ unitRateId: '', qty: '', difficulty: 'avg' })
-  }
-
-  const removeWbs = (id) => setWbsItems(prev => prev.filter(w => w.id !== id))
-
-  const toggleEngineer = (id) => setAssigned(prev =>
-    prev.includes(id) ? prev.filter(e => e !== id) : [...prev, id]
+  const { teamRates } = useApp()
+  const [mheNo]        = useState(rfq.mheNo || genMheNo(rfq))
+  const [dateCompletion, setDateCompletion] = useState(rfq.dateCompletion || '')
+  const [rows, setRows] = useState(
+    rfq.mheRows && rfq.mheRows.length > 0
+      ? rfq.mheRows
+      : [{ ...EMPTY_MHE_ROW, id: `mhe-${Date.now()}` }]
   )
 
+  const addRow = () => setRows(prev => [...prev, { ...EMPTY_MHE_ROW, id: `mhe-${Date.now()}` }])
+  const removeRow = (id) => setRows(prev => prev.filter(r => r.id !== id))
+  const updateRow = (id, field, value) => setRows(prev => prev.map(r => {
+    if (r.id !== id) return r
+    const updated = { ...r, [field]: value }
+    if (field === 'qty' || field === 'unitMH') {
+      const q = parseFloat(field === 'qty' ? value : updated.qty) || 0
+      const u = parseFloat(field === 'unitMH' ? value : updated.unitMH) || 0
+      updated.totalMH = +(q * u).toFixed(2)
+    }
+    return updated
+  }))
+
+  const totalMH = rows.reduce((s, r) => s + (r.totalMH || 0), 0)
+
+  const engOptions = teamRates.map(e => e.name)
+
+  const canSubmit = rows.some(r => r.activityName.trim()) && dateCompletion
+
   return (
-    <div className="px-6 py-5 space-y-5">
-      {/* WBS Builder */}
-      <div>
-        <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2"><ClipboardList size={15} /> WBS Manhour Breakdown</h3>
-        {/* Add row */}
-        <div className="grid grid-cols-12 gap-2 mb-3 bg-slate-50 p-3 rounded-lg border border-slate-200">
-          <div className="col-span-5">
-            <label className="text-xs text-slate-500 font-medium block mb-1">Task (from Modal G)</label>
-            <select value={addRow.unitRateId} onChange={e => setAddRow(p => ({ ...p, unitRateId: e.target.value }))}
-              className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded-md outline-none focus:border-blue-500 bg-white">
-              <option value="">— Select Task —</option>
-              {unitRates.map(ur => (
-                <option key={ur.id} value={ur.id}>{ur.category} — {ur.task} ({ur.unit})</option>
-              ))}
-            </select>
+    <div className="px-6 py-5 space-y-5 max-h-[78vh] overflow-y-auto">
+
+      {/* Header Info */}
+      <div className="bg-slate-50 rounded-xl border border-slate-200 p-4">
+        <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">Manhour Estimate — {rfq.requestWorkNo}</p>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className="text-xs font-semibold text-slate-600 block mb-1">MHE No.</label>
+            <div className="px-3 py-2 text-sm font-bold text-[#0f2035] bg-white border border-slate-200 rounded-lg">{mheNo}</div>
           </div>
-          <div className="col-span-2">
-            <label className="text-xs text-slate-500 font-medium block mb-1">Qty</label>
-            <input type="number" min="0" step="0.1" value={addRow.qty}
-              onChange={e => setAddRow(p => ({ ...p, qty: e.target.value }))}
-              className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded-md outline-none focus:border-blue-500" />
-          </div>
-          <div className="col-span-3">
-            <label className="text-xs text-slate-500 font-medium block mb-1">Difficulty</label>
-            <select value={addRow.difficulty} onChange={e => setAddRow(p => ({ ...p, difficulty: e.target.value }))}
-              className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded-md outline-none focus:border-blue-500 bg-white">
-              <option value="min">Easy (Min)</option>
-              <option value="avg">Normal (Avg)</option>
-              <option value="max">Hard (Max)</option>
-            </select>
-          </div>
-          <div className="col-span-2 flex items-end">
-            {selectedUR && addRow.difficulty && (
-              <div className="text-xs text-slate-500 mb-2 mr-1">
-                {addRow.difficulty === 'min' ? selectedUR.min : addRow.difficulty === 'max' ? selectedUR.max : selectedUR.avg} MH/unit
-              </div>
-            )}
-            <button onClick={addWbs}
-              className="px-3 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-md flex items-center gap-1 mb-0.5">
-              <Plus size={12} /> Add
-            </button>
+          <div>
+            <label className="text-xs font-semibold text-slate-600 block mb-1">Date of Completion <span className="text-red-500">*</span></label>
+            <input type="date" value={dateCompletion} onChange={e => setDateCompletion(e.target.value)}
+              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-200" />
           </div>
         </div>
-        {/* WBS Table */}
-        <div className="overflow-x-auto rounded-lg border border-slate-200">
-          <table className="w-full text-xs">
-            <thead className="bg-slate-50 border-b border-slate-200">
+      </div>
+
+      {/* Manhour Estimate Table */}
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+            <ClipboardList size={15} /> Manhour Estimate Table
+          </h3>
+          <button onClick={addRow}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg">
+            <Plus size={12} /> Add Activity
+          </button>
+        </div>
+
+        <div className="overflow-x-auto rounded-xl border border-slate-200">
+          <table className="w-full text-xs" style={{ minWidth: 900 }}>
+            <thead className="bg-[#0f2035] text-white">
               <tr>
-                <th className="px-3 py-2 text-left text-slate-500 font-semibold">Task</th>
-                <th className="px-3 py-2 text-left text-slate-500 font-semibold">Unit</th>
-                <th className="px-3 py-2 text-right text-slate-500 font-semibold">Qty</th>
-                <th className="px-3 py-2 text-left text-slate-500 font-semibold">Difficulty</th>
-                <th className="px-3 py-2 text-right text-slate-500 font-semibold">MH/Unit</th>
-                <th className="px-3 py-2 text-right text-slate-500 font-semibold">Total MH</th>
-                <th className="px-3 py-2 w-8"></th>
+                <th className="px-2 py-2.5 text-center font-semibold w-10">#</th>
+                <th className="px-2 py-2.5 text-left font-semibold min-w-[160px]">Activity Name</th>
+                <th className="px-2 py-2.5 text-left font-semibold w-28">Type</th>
+                <th className="px-2 py-2.5 text-left font-semibold min-w-[120px]">Additional Info</th>
+                <th className="px-2 py-2.5 text-right font-semibold w-16">Qty</th>
+                <th className="px-2 py-2.5 text-right font-semibold w-20">Unit MH</th>
+                <th className="px-2 py-2.5 text-right font-semibold w-20">Total MH</th>
+                <th className="px-2 py-2.5 text-left font-semibold w-36">Assign Engineer</th>
+                <th className="px-2 py-2.5 text-left font-semibold min-w-[120px]">Note</th>
+                <th className="px-2 py-2.5 w-8"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {wbsItems.length === 0 ? (
-                <tr><td colSpan={7} className="px-3 py-6 text-center text-slate-400">No WBS items yet. Add tasks above.</td></tr>
-              ) : wbsItems.map(w => (
-                <tr key={w.id} className="hover:bg-slate-50">
-                  <td className="px-3 py-2 font-medium text-slate-800">{w.task}</td>
-                  <td className="px-3 py-2 text-slate-500">{w.unit}</td>
-                  <td className="px-3 py-2 text-right tabular-nums">{w.qty}</td>
-                  <td className="px-3 py-2">
-                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${w.difficulty === 'max' ? 'bg-red-100 text-red-600' : w.difficulty === 'min' ? 'bg-green-100 text-green-600' : 'bg-blue-100 text-blue-600'}`}>
-                      {w.difficulty === 'min' ? 'Easy' : w.difficulty === 'max' ? 'Hard' : 'Normal'}
-                    </span>
+              {rows.map((row, idx) => (
+                <tr key={row.id} className="hover:bg-blue-50 bg-cyan-50/30">
+                  <td className="px-2 py-1.5 text-center font-bold text-slate-400 text-[10px]">{String(idx + 1).padStart(2, '0')}</td>
+                  <td className="px-2 py-1.5">
+                    <input value={row.activityName} onChange={e => updateRow(row.id, 'activityName', e.target.value)}
+                      placeholder="Activity name…"
+                      className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-blue-400 bg-white" />
                   </td>
-                  <td className="px-3 py-2 text-right tabular-nums">{w.unitMH}</td>
-                  <td className="px-3 py-2 text-right font-semibold tabular-nums text-[#0f2035]">{w.totalMH}</td>
-                  <td className="px-3 py-2">
-                    <button onClick={() => removeWbs(w.id)} className="text-slate-300 hover:text-red-500 transition-colors">
+                  <td className="px-2 py-1.5">
+                    <select value={row.type} onChange={e => updateRow(row.id, 'type', e.target.value)}
+                      className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-blue-400 bg-white">
+                      {MHE_TYPES.map(t => <option key={t}>{t}</option>)}
+                    </select>
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <input value={row.additionalInfo} onChange={e => updateRow(row.id, 'additionalInfo', e.target.value)}
+                      placeholder="Detail…"
+                      className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-blue-400 bg-white" />
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <input type="number" min="0" step="0.1" value={row.qty} onChange={e => updateRow(row.id, 'qty', e.target.value)}
+                      className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-blue-400 bg-white text-right" />
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <input type="number" min="0" step="0.01" value={row.unitMH} onChange={e => updateRow(row.id, 'unitMH', e.target.value)}
+                      className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-blue-400 bg-white text-right" />
+                  </td>
+                  <td className="px-2 py-1.5 text-right font-bold text-[#0f2035] tabular-nums">
+                    {row.totalMH > 0 ? row.totalMH : '—'}
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <select value={row.assignEngineer} onChange={e => updateRow(row.id, 'assignEngineer', e.target.value)}
+                      className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-blue-400 bg-white">
+                      <option value="">— Select —</option>
+                      {engOptions.map(n => <option key={n}>{n}</option>)}
+                    </select>
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <input value={row.note} onChange={e => updateRow(row.id, 'note', e.target.value)}
+                      placeholder="Note…"
+                      className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-blue-400 bg-white" />
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <button onClick={() => removeRow(row.id)} className="text-slate-300 hover:text-red-500 transition-colors">
                       <Trash2 size={13} />
                     </button>
                   </td>
                 </tr>
               ))}
             </tbody>
-            {wbsItems.length > 0 && (
-              <tfoot className="border-t-2 border-slate-300 bg-slate-50">
-                <tr>
-                  <td colSpan={5} className="px-3 py-2 font-semibold text-slate-700 text-right">Total Planned MH:</td>
-                  <td className="px-3 py-2 font-bold text-[#0f2035] text-right tabular-nums text-sm">{totalMH.toFixed(2)}</td>
-                  <td></td>
-                </tr>
-              </tfoot>
-            )}
+            <tfoot className="bg-slate-100 border-t-2 border-slate-300">
+              <tr>
+                <td colSpan={6} className="px-3 py-2 font-bold text-slate-700 text-right text-xs">Total Manhours:</td>
+                <td className="px-3 py-2 font-bold text-[#0f2035] text-right tabular-nums">{totalMH.toFixed(2)}</td>
+                <td colSpan={3}></td>
+              </tr>
+            </tfoot>
           </table>
         </div>
-      </div>
-
-      {/* Assign Engineers */}
-      <div>
-        <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2"><Users size={15} /> Assign Engineers</h3>
-        <div className="grid grid-cols-2 gap-2">
-          {teamRates.map(eng => (
-            <label key={eng.id}
-              className={`flex items-center gap-3 p-2.5 rounded-lg border cursor-pointer transition-colors ${assigned.includes(eng.id) ? 'border-blue-400 bg-blue-50' : 'border-slate-200 hover:bg-slate-50'}`}>
-              <input type="checkbox" checked={assigned.includes(eng.id)} onChange={() => toggleEngineer(eng.id)} className="accent-blue-600" />
-              <div className="w-7 h-7 rounded-full bg-[#0f2035] text-white flex items-center justify-center text-[10px] font-bold flex-shrink-0">
-                {eng.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
-              </div>
-              <div className="min-w-0">
-                <p className="text-xs font-semibold text-slate-800 truncate">{eng.name}</p>
-                <p className="text-[10px] text-slate-500">{eng.position}</p>
-              </div>
-            </label>
-          ))}
-        </div>
+        {!canSubmit && (
+          <p className="text-xs text-amber-600 mt-1">Add at least one activity and set a completion date before submitting.</p>
+        )}
       </div>
 
       <div className="flex justify-between gap-3 pt-2 border-t border-slate-100">
         <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg">Cancel</button>
         <button
-          onClick={() => wbsItems.length > 0 && onSave({ wbsItems, assignedEngineers: assigned, totalPlannedMH: +totalMH.toFixed(2), status: 'Pending Manager' })}
-          disabled={wbsItems.length === 0}
+          onClick={() => canSubmit && onSave({
+            mheNo, dateCompletion, mheRows: rows,
+            wbsItems: rows.map(r => ({ id: r.id, task: r.activityName, unit: 'activity', qty: parseFloat(r.qty)||0, unitMH: parseFloat(r.unitMH)||0, totalMH: r.totalMH||0, type: r.type, additionalInfo: r.additionalInfo, assignEngineer: r.assignEngineer, note: r.note })),
+            assignedEngineers: [...new Set(rows.filter(r => r.assignEngineer).map(r => teamRates.find(t => t.name === r.assignEngineer)?.id).filter(Boolean))],
+            totalPlannedMH: +totalMH.toFixed(2),
+            status: 'Pending Manager',
+          })}
+          disabled={!canSubmit}
           className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
-          Submit to Manager <ArrowRight size={14} />
+          Submit to Cost Estimate <ArrowRight size={14} />
         </button>
       </div>
     </div>
@@ -535,157 +630,236 @@ function Stage2Form({ rfq, onSave, onClose }) {
 
 // ─── Stage 3: Cost Estimate (ppeManager) ─────────────────────────────────────
 
+const EMPTY_INDIRECT = { description: '', unit: '', rate: '', qty: '', note: '' }
+
 function Stage3Form({ rfq, onSave, onClose, onCancel }) {
-  const { teamRates } = useApp()
-  const [costItems, setCostItems] = useState(rfq.costItems || [])
-  const [addCost, setAddCost]     = useState({ type: 'Direct', description: '', amount: '' })
+  // Direct cost rows come from MHE rows — PPE Manager adds Rate per row
+  const mheRows = rfq.mheRows || rfq.wbsItems || []
+  const [directRows, setDirectRows] = useState(() =>
+    (rfq.directCostRows && rfq.directCostRows.length > 0)
+      ? rfq.directCostRows
+      : mheRows.map(r => ({
+          id: r.id,
+          activityName: r.activityName || r.task || '',
+          type: r.type || '',
+          qty: r.qty || 0,
+          unitMH: r.unitMH || 0,
+          totalMH: r.totalMH || 0,
+          assignEngineer: r.assignEngineer || '',
+          rate: '',
+          totalCost: 0,
+          note: r.note || '',
+        }))
+  )
+  const [indirectRows, setIndirectRows] = useState(
+    rfq.indirectCostRows && rfq.indirectCostRows.length > 0
+      ? rfq.indirectCostRows
+      : [{ ...EMPTY_INDIRECT, id: `ind-${Date.now()}` }]
+  )
+  const [overheadPct, setOverheadPct] = useState(rfq.overheadPct ?? 15)
+  const [submitNote, setSubmitNote]   = useState('')
   const [showConfirmCancel, setShowConfirmCancel] = useState(false)
 
-  // AUTO: labour cost from assigned engineers × planned MH
-  const labourCost = useMemo(() => {
-    const engineers = (rfq.assignedEngineers || []).map(id => teamRates.find(t => t.id === id)).filter(Boolean)
-    if (!engineers.length || !rfq.totalPlannedMH) return 0
-    const avgRate = engineers.reduce((s, e) => s + e.ratePerHour, 0) / engineers.length
-    return Math.round(avgRate * rfq.totalPlannedMH)
-  }, [rfq.assignedEngineers, rfq.totalPlannedMH, teamRates])
+  // Comment history
+  const commentHistory = rfq.costComments || []
 
-  const assignedEngineers = (rfq.assignedEngineers || [])
-    .map(id => teamRates.find(t => t.id === id))
-    .filter(Boolean)
+  // Direct cost calculations
+  const updateDirect = (id, field, value) => setDirectRows(prev => prev.map(r => {
+    if (r.id !== id) return r
+    const updated = { ...r, [field]: value }
+    if (field === 'rate') {
+      updated.totalCost = +(parseFloat(value || 0) * (r.totalMH || 0)).toFixed(2)
+    }
+    return updated
+  }))
+  const totalDirect = directRows.reduce((s, r) => s + (parseFloat(r.totalCost) || 0), 0)
 
-  const manualTotal  = costItems.reduce((s, c) => s + Number(c.amount), 0)
-  const totalCost    = labourCost + manualTotal
+  // Indirect cost calculations
+  const addIndirect = () => setIndirectRows(prev => [...prev, { ...EMPTY_INDIRECT, id: `ind-${Date.now()}` }])
+  const removeIndirect = (id) => setIndirectRows(prev => prev.filter(r => r.id !== id))
+  const updateIndirect = (id, field, value) => setIndirectRows(prev => prev.map(r => {
+    if (r.id !== id) return r
+    const updated = { ...r, [field]: value }
+    if (field === 'rate' || field === 'qty') {
+      const rate = parseFloat(field === 'rate' ? value : updated.rate) || 0
+      const qty  = parseFloat(field === 'qty'  ? value : updated.qty)  || 0
+      updated.amount = +(rate * qty).toFixed(2)
+    }
+    return updated
+  }))
+  const totalIndirect = indirectRows.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0)
 
-  const addCostItem = () => {
-    if (!addCost.description.trim() || !addCost.amount || Number(addCost.amount) <= 0) return
-    setCostItems(prev => [...prev, { id: `ci-${Date.now()}`, type: addCost.type, description: addCost.description.trim(), amount: Number(addCost.amount) }])
-    setAddCost({ type: 'Direct', description: '', amount: '' })
-  }
+  // B3.3 Summary
+  const totalAB      = totalDirect + totalIndirect
+  const overheadAmt  = +(totalAB * (overheadPct / 100)).toFixed(2)
+  const grandTotal   = +(totalAB + overheadAmt).toFixed(2)
 
-  const removeCostItem = (id) => setCostItems(prev => prev.filter(c => c.id !== id))
+  const canSubmit = directRows.some(r => parseFloat(r.rate) > 0) && submitNote.trim()
 
   return (
-    <div className="px-6 py-5 space-y-5">
-      {/* Summary from Stage 2 */}
-      <div className="bg-slate-50 rounded-lg border border-slate-200 p-4">
-        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">From Manhour Plan</p>
-        <div className="flex gap-6">
-          <div>
-            <p className="text-xl font-bold text-[#0f2035]">{rfq.totalPlannedMH} MH</p>
-            <p className="text-xs text-slate-500">Total Planned Manhours</p>
-          </div>
-          <div>
-            <p className="text-xl font-bold text-[#0f2035]">{rfq.wbsItems?.length || 0}</p>
-            <p className="text-xs text-slate-500">WBS Tasks</p>
-          </div>
+    <div className="px-6 py-5 space-y-6 max-h-[80vh] overflow-y-auto">
+
+      {/* MHE Reference Banner */}
+      <div className="bg-slate-50 rounded-xl border border-slate-200 p-3 flex items-center gap-4">
+        <div className="text-center px-4 border-r border-slate-200">
+          <p className="text-lg font-bold text-[#0f2035]">{rfq.mheNo || rfq.requestWorkNo}</p>
+          <p className="text-[10px] text-slate-400">MHE / RFQ No.</p>
+        </div>
+        <div className="text-center px-4 border-r border-slate-200">
+          <p className="text-lg font-bold text-[#0f2035]">{rfq.totalPlannedMH || 0}</p>
+          <p className="text-[10px] text-slate-400">Total MH</p>
+        </div>
+        <div className="text-center px-4">
+          <p className="text-lg font-bold text-[#0f2035]">{rfq.dateCompletion || '—'}</p>
+          <p className="text-[10px] text-slate-400">Target Completion</p>
         </div>
       </div>
 
-      {/* Auto Labour Cost from Modal H */}
-      <div>
-        <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2">
-          <Calculator size={15} />
-          Auto-Calculated Labour Cost
-          <span className="text-[10px] font-normal text-green-600 bg-green-50 px-2 py-0.5 rounded-full border border-green-200">Pulled from Modal H</span>
-        </h3>
-        <div className="rounded-lg border border-green-200 bg-green-50 p-4 space-y-2">
-          <div className="flex flex-wrap gap-2 mb-3">
-            {assignedEngineers.map(eng => (
-              <div key={eng.id} className="flex items-center gap-1.5 bg-white border border-green-200 rounded-lg px-2.5 py-1.5">
-                <div className="w-6 h-6 rounded-full bg-[#0f2035] text-white flex items-center justify-center text-[9px] font-bold">
-                  {eng.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
-                </div>
-                <div>
-                  <p className="text-xs font-semibold text-slate-700">{eng.name}</p>
-                  <p className="text-[10px] text-slate-500">{formatIDR(eng.ratePerHour)}/hr</p>
-                </div>
+      {/* Comment History (loop) */}
+      {commentHistory.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1"><MessageSquare size={12} /> Review Comment History</p>
+          <div className="space-y-2 max-h-32 overflow-y-auto">
+            {commentHistory.map((c, i) => (
+              <div key={i} className={`rounded-lg px-3 py-2 text-xs border ${c.role === 'ppeManager' ? 'bg-blue-50 border-blue-200' : 'bg-amber-50 border-amber-200'}`}>
+                <p className="font-semibold text-slate-600">{c.role} — {c.date}</p>
+                <p className="text-slate-700 mt-0.5">{c.note}</p>
               </div>
             ))}
-            {assignedEngineers.length === 0 && <p className="text-xs text-slate-400">No engineers assigned in Stage 2.</p>}
-          </div>
-          <div className="flex items-center justify-between border-t border-green-200 pt-2">
-            <div className="text-xs text-slate-600">
-              Avg Rate ({formatIDR(assignedEngineers.length ? Math.round(assignedEngineers.reduce((s,e) => s+e.ratePerHour,0)/assignedEngineers.length) : 0)}/hr)
-              × {rfq.totalPlannedMH} MH
-            </div>
-            <span className="font-bold text-green-700 text-sm">{formatIDR(labourCost)}</span>
           </div>
         </div>
-      </div>
+      )}
 
-      {/* Additional Cost Items */}
+      {/* Table A: Direct Cost */}
       <div>
-        <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-2"><DollarSign size={15} /> Additional Cost Items</h3>
-        <div className="grid grid-cols-12 gap-2 mb-3 bg-slate-50 p-3 rounded-lg border border-slate-200">
-          <div className="col-span-2">
-            <label className="text-xs text-slate-500 font-medium block mb-1">Type</label>
-            <select value={addCost.type} onChange={e => setAddCost(p => ({ ...p, type: e.target.value }))}
-              className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded-md outline-none focus:border-blue-500 bg-white">
-              <option>Direct</option>
-              <option>Indirect</option>
-            </select>
-          </div>
-          <div className="col-span-6">
-            <label className="text-xs text-slate-500 font-medium block mb-1">Description</label>
-            <input value={addCost.description} onChange={e => setAddCost(p => ({ ...p, description: e.target.value }))}
-              placeholder="e.g. Materials, Mobilization…"
-              className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded-md outline-none focus:border-blue-500" />
-          </div>
-          <div className="col-span-3">
-            <label className="text-xs text-slate-500 font-medium block mb-1">Amount (THB)</label>
-            <input type="number" min="0" value={addCost.amount} onChange={e => setAddCost(p => ({ ...p, amount: e.target.value }))}
-              placeholder="0"
-              className="w-full px-2 py-1.5 text-xs border border-slate-300 rounded-md outline-none focus:border-blue-500" />
-          </div>
-          <div className="col-span-1 flex items-end">
-            <button onClick={addCostItem}
-              className="px-2 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-md flex items-center gap-1">
-              <Plus size={11} />
-            </button>
-          </div>
-        </div>
-        <div className="rounded-lg border border-slate-200 overflow-hidden">
-          <table className="w-full text-xs">
-            <thead className="bg-slate-50 border-b border-slate-200">
+        <p className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-2 flex items-center gap-1">
+          <Calculator size={13} /> Table A — Direct Cost Estimate
+        </p>
+        <div className="overflow-x-auto rounded-xl border border-slate-200">
+          <table className="w-full text-xs" style={{ minWidth: 860 }}>
+            <thead className="bg-[#0f2035] text-white">
               <tr>
-                <th className="px-3 py-2 text-left text-slate-500 font-semibold">Type</th>
-                <th className="px-3 py-2 text-left text-slate-500 font-semibold">Description</th>
-                <th className="px-3 py-2 text-right text-slate-500 font-semibold">Amount</th>
-                <th className="px-3 py-2 w-8"></th>
+                <th className="px-2 py-2.5 text-center w-10">#</th>
+                <th className="px-2 py-2.5 text-left min-w-[140px]">Activity Name</th>
+                <th className="px-2 py-2.5 text-left w-28">Type</th>
+                <th className="px-2 py-2.5 text-right w-14">Qty</th>
+                <th className="px-2 py-2.5 text-right w-20">Unit MH</th>
+                <th className="px-2 py-2.5 text-right w-20">Total MH</th>
+                <th className="px-2 py-2.5 text-left w-32">Assign Eng.</th>
+                <th className="px-2 py-2.5 text-right w-28">Rate (THB/MH)</th>
+                <th className="px-2 py-2.5 text-right w-28">Total Cost</th>
+                <th className="px-2 py-2.5 text-left min-w-[100px]">Note</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {/* Auto labour row */}
-              <tr className="bg-green-50">
-                <td className="px-3 py-2"><span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-green-100 text-green-700">Labour</span></td>
-                <td className="px-3 py-2 text-slate-600">Engineer Labour Cost (auto)</td>
-                <td className="px-3 py-2 text-right font-semibold tabular-nums text-green-700">{formatIDR(labourCost)}</td>
-                <td></td>
-              </tr>
-              {costItems.length === 0 && (
-                <tr><td colSpan={4} className="px-3 py-4 text-center text-slate-400">No additional items.</td></tr>
-              )}
-              {costItems.map(c => (
-                <tr key={c.id} className="hover:bg-slate-50">
-                  <td className="px-3 py-2">
-                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${c.type === 'Direct' ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}`}>
-                      {c.type}
-                    </span>
+              {directRows.length === 0 ? (
+                <tr><td colSpan={10} className="px-3 py-6 text-center text-slate-400">No activities from Manhour Plan.</td></tr>
+              ) : directRows.map((row, idx) => (
+                <tr key={row.id} className="hover:bg-cyan-50 bg-cyan-50/20">
+                  <td className="px-2 py-1.5 text-center text-slate-400 font-bold text-[10px]">{String(idx+1).padStart(2,'0')}</td>
+                  <td className="px-2 py-1.5 font-medium text-slate-800">{row.activityName}</td>
+                  <td className="px-2 py-1.5 text-slate-500">{row.type}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">{row.qty}</td>
+                  <td className="px-2 py-1.5 text-right tabular-nums">{row.unitMH}</td>
+                  <td className="px-2 py-1.5 text-right font-semibold tabular-nums">{row.totalMH}</td>
+                  <td className="px-2 py-1.5 text-slate-500">{row.assignEngineer}</td>
+                  <td className="px-2 py-1.5">
+                    <input type="number" min="0" step="1" value={row.rate}
+                      onChange={e => updateDirect(row.id, 'rate', e.target.value)}
+                      placeholder="0"
+                      className="w-full px-2 py-1 text-xs border border-amber-300 rounded outline-none focus:border-amber-500 bg-amber-50 text-right font-semibold" />
                   </td>
-                  <td className="px-3 py-2 text-slate-700">{c.description}</td>
-                  <td className="px-3 py-2 text-right font-semibold tabular-nums">{formatIDR(c.amount)}</td>
-                  <td className="px-3 py-2">
-                    <button onClick={() => removeCostItem(c.id)} className="text-slate-300 hover:text-red-500 transition-colors">
+                  <td className="px-2 py-1.5 text-right font-bold text-[#0f2035] tabular-nums">
+                    {row.totalCost > 0 ? row.totalCost.toLocaleString('th-TH') : '—'}
+                  </td>
+                  <td className="px-2 py-1.5 text-slate-400 text-[10px]">{row.note}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot className="bg-slate-100 border-t-2 border-slate-300">
+              <tr>
+                <td colSpan={8} className="px-3 py-2 font-bold text-slate-700 text-right text-xs">Total Direct Cost:</td>
+                <td className="px-3 py-2 font-bold text-[#0f2035] text-right tabular-nums">{totalDirect.toLocaleString('th-TH')}</td>
+                <td><span className="text-[10px] text-slate-400 px-1">Baht</span></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>
+
+      {/* Table B: Indirect Cost */}
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <p className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1">
+            <DollarSign size={13} /> Table B — Indirect Cost
+          </p>
+          <button onClick={addIndirect}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg">
+            <Plus size={12} /> Add Item
+          </button>
+        </div>
+        <div className="overflow-x-auto rounded-xl border border-slate-200">
+          <table className="w-full text-xs" style={{ minWidth: 720 }}>
+            <thead className="bg-indigo-800 text-white">
+              <tr>
+                <th className="px-2 py-2.5 text-center w-10">Item</th>
+                <th className="px-2 py-2.5 text-left min-w-[180px]">Description</th>
+                <th className="px-2 py-2.5 text-left w-20">Unit</th>
+                <th className="px-2 py-2.5 text-right w-24">Rate</th>
+                <th className="px-2 py-2.5 text-right w-16">Qty</th>
+                <th className="px-2 py-2.5 text-right w-28">Amount</th>
+                <th className="px-2 py-2.5 text-left min-w-[100px]">Note</th>
+                <th className="px-2 py-2.5 w-8"></th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {indirectRows.map((row, idx) => (
+                <tr key={row.id} className="hover:bg-indigo-50">
+                  <td className="px-2 py-1.5 text-center text-slate-400 font-bold text-[10px]">{String(idx+1).padStart(2,'0')}</td>
+                  <td className="px-2 py-1.5">
+                    <input value={row.description} onChange={e => updateIndirect(row.id, 'description', e.target.value)}
+                      placeholder="Description…"
+                      className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-indigo-400 bg-white" />
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <input value={row.unit} onChange={e => updateIndirect(row.id, 'unit', e.target.value)}
+                      placeholder="ea / m²…"
+                      className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-indigo-400 bg-white" />
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <input type="number" min="0" value={row.rate} onChange={e => updateIndirect(row.id, 'rate', e.target.value)}
+                      placeholder="0"
+                      className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-indigo-400 bg-white text-right" />
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <input type="number" min="0" value={row.qty} onChange={e => updateIndirect(row.id, 'qty', e.target.value)}
+                      placeholder="0"
+                      className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-indigo-400 bg-white text-right" />
+                  </td>
+                  <td className="px-2 py-1.5 text-right font-semibold tabular-nums text-indigo-800">
+                    {row.amount > 0 ? row.amount.toLocaleString('th-TH') : '—'}
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <input value={row.note} onChange={e => updateIndirect(row.id, 'note', e.target.value)}
+                      placeholder="Note…"
+                      className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-indigo-400 bg-white" />
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <button onClick={() => removeIndirect(row.id)} className="text-slate-300 hover:text-red-500">
                       <Trash2 size={13} />
                     </button>
                   </td>
                 </tr>
               ))}
+              {indirectRows.length === 0 && (
+                <tr><td colSpan={8} className="px-3 py-4 text-center text-slate-400">No indirect cost items.</td></tr>
+              )}
             </tbody>
-            <tfoot className="border-t-2 border-slate-300 bg-slate-50">
+            <tfoot className="bg-indigo-50 border-t-2 border-indigo-200">
               <tr>
-                <td colSpan={2} className="px-3 py-2 font-bold text-slate-700 text-right">TOTAL COST ESTIMATE:</td>
-                <td className="px-3 py-2 font-bold text-[#0f2035] text-right tabular-nums text-sm">{formatIDR(totalCost)}</td>
+                <td colSpan={5} className="px-3 py-2 font-bold text-indigo-800 text-right text-xs">Total Indirect Cost:</td>
+                <td className="px-3 py-2 font-bold text-indigo-900 text-right tabular-nums">{totalIndirect.toLocaleString('th-TH')}</td>
+                <td><span className="text-[10px] text-slate-400 px-1">Baht</span></td>
                 <td></td>
               </tr>
             </tfoot>
@@ -693,15 +867,64 @@ function Stage3Form({ rfq, onSave, onClose, onCancel }) {
         </div>
       </div>
 
+      {/* Table B3.3: Grand Summary */}
+      <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 space-y-2">
+        <p className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-3">Table B3.3 — Cost Summary</p>
+        <div className="space-y-2 text-sm">
+          <div className="flex justify-between items-center">
+            <span className="text-slate-600 text-xs">Total Direct + Indirect (Table A + Table B)</span>
+            <span className="font-bold text-slate-800 tabular-nums">{totalAB.toLocaleString('th-TH')} Baht</span>
+          </div>
+          <div className="flex justify-between items-center">
+            <span className="text-slate-600 text-xs flex items-center gap-2">
+              Overhead + Profit %
+              <input type="number" min="0" max="100" step="0.5" value={overheadPct}
+                onChange={e => setOverheadPct(parseFloat(e.target.value) || 0)}
+                className="w-16 px-2 py-0.5 text-xs border border-orange-300 rounded outline-none focus:border-orange-500 bg-white text-right font-semibold" />
+              %
+            </span>
+            <span className="font-bold text-orange-700 tabular-nums">{overheadAmt.toLocaleString('th-TH')} Baht</span>
+          </div>
+          <div className="flex justify-between items-center border-t-2 border-orange-300 pt-2">
+            <span className="font-bold text-slate-800">Grand Total (Direct + Indirect + Overhead + Profit)</span>
+            <span className="font-bold text-[#0f2035] text-lg tabular-nums">{grandTotal.toLocaleString('th-TH')} Baht</span>
+          </div>
+          <p className="text-[10px] text-slate-400">(Cost excluding VAT 7%)</p>
+        </div>
+      </div>
+
+      {/* Submit Note (required for submission / revision loop) */}
+      <div>
+        <label className="block text-xs font-semibold text-slate-600 mb-1">
+          Note to Requestor <span className="text-red-500">*</span>
+          <span className="text-slate-400 font-normal ml-1">— required when submitting for review</span>
+        </label>
+        <textarea rows={3} value={submitNote} onChange={e => setSubmitNote(e.target.value)}
+          placeholder="Describe assumptions, key cost drivers, or messages to requestor…"
+          className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg outline-none resize-none focus:border-blue-500 focus:ring-1 focus:ring-blue-200"
+        />
+      </div>
+
       <div className="flex justify-between gap-3 pt-2 border-t border-slate-100">
         <button onClick={() => setShowConfirmCancel(true)}
           className="px-4 py-2 text-sm font-medium text-red-600 border border-red-200 bg-red-50 hover:bg-red-100 rounded-lg flex items-center gap-2">
-          <XCircle size={15} /> Mark Cancelled / Lost
+          <XCircle size={15} /> Cancel RFQ
         </button>
         <div className="flex gap-3">
-          <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg">Cancel</button>
-          <button onClick={() => onSave({ costItems, totalCost, status: 'Pending Approval' })}
-            className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg flex items-center gap-2">
+          <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg">Close</button>
+          <button
+            onClick={() => canSubmit && onSave({
+              directCostRows: directRows,
+              indirectCostRows: indirectRows,
+              overheadPct,
+              totalDirectCost: totalDirect,
+              totalIndirectCost: totalIndirect,
+              totalCost: grandTotal,
+              costComments: [...commentHistory, { role: 'ppeManager', date: new Date().toISOString().split('T')[0], note: submitNote }],
+              status: 'Pending Approval',
+            })}
+            disabled={!canSubmit}
+            className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
             Submit to Requestor <ArrowRight size={14} />
           </button>
         </div>
@@ -711,8 +934,8 @@ function Stage3Form({ rfq, onSave, onClose, onCancel }) {
         isOpen={showConfirmCancel}
         onClose={() => setShowConfirmCancel(false)}
         onConfirm={() => { onCancel(); onClose() }}
-        title="Mark as Cancelled / Lost"
-        message="Are you sure you want to mark this RFQ as Cancelled/Lost? This cannot be undone."
+        title="Cancel RFQ"
+        message="Are you sure you want to cancel this RFQ? This cannot be undone."
       />
     </div>
   )
@@ -721,65 +944,85 @@ function Stage3Form({ rfq, onSave, onClose, onCancel }) {
 // ─── Stage 4: Approval (Requestor / GM/MD) ───────────────────────────────────
 
 function Stage4Form({ rfq, onSave, onClose }) {
-  const { teamRates } = useApp()
-  const [note, setNote] = useState(rfq.approvalNote || '')
+  const [note, setNote]                         = useState('')
+  const [showConfirmCancel, setShowConfirmCancel] = useState(false)
 
-  const assignedEngineers = (rfq.assignedEngineers || [])
-    .map(id => teamRates.find(t => t.id === id))
-    .filter(Boolean)
+  const commentHistory = rfq.costComments || []
+
+  // MHE activity rows (prefer mheRows, fallback to wbsItems)
+  const activityRows = rfq.mheRows || rfq.wbsItems || []
+  const directRows   = rfq.directCostRows || []
 
   return (
-    <div className="px-6 py-5 space-y-5">
-      {/* Cost Summary */}
-      <div className="grid grid-cols-3 gap-4">
-        <div className="bg-slate-50 rounded-xl border border-slate-200 p-4 text-center">
-          <p className="text-xl font-bold text-[#0f2035]">{rfq.totalPlannedMH}</p>
-          <p className="text-xs text-slate-500 mt-0.5">Total Planned MH</p>
+    <div className="px-6 py-5 space-y-5 max-h-[80vh] overflow-y-auto">
+
+      {/* Cost Summary Banner */}
+      <div className="grid grid-cols-3 gap-3">
+        <div className="bg-slate-50 rounded-xl border border-slate-200 p-3 text-center">
+          <p className="text-xl font-bold text-[#0f2035]">{rfq.totalPlannedMH || 0}</p>
+          <p className="text-xs text-slate-500 mt-0.5">Total MH</p>
         </div>
-        <div className="bg-slate-50 rounded-xl border border-slate-200 p-4 text-center">
-          <p className="text-xl font-bold text-[#0f2035]">{rfq.wbsItems?.length || 0}</p>
-          <p className="text-xs text-slate-500 mt-0.5">WBS Tasks</p>
+        <div className="bg-slate-50 rounded-xl border border-slate-200 p-3 text-center">
+          <p className="text-xl font-bold text-[#0f2035]">{rfq.mheNo || rfq.requestWorkNo}</p>
+          <p className="text-xs text-slate-500 mt-0.5">MHE No.</p>
         </div>
-        <div className="bg-green-50 rounded-xl border border-green-200 p-4 text-center">
-          <p className="text-xl font-bold text-green-700">{formatIDR(rfq.totalCost)}</p>
-          <p className="text-xs text-slate-500 mt-0.5">Total Cost Estimate</p>
+        <div className="bg-green-50 rounded-xl border border-green-200 p-3 text-center">
+          <p className="text-xl font-bold text-green-700">{(rfq.totalCost || 0).toLocaleString('th-TH')}</p>
+          <p className="text-xs text-slate-500 mt-0.5">Grand Total (Baht)</p>
         </div>
       </div>
 
-      {/* Assigned Engineers */}
-      <div>
-        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Assigned Engineers</p>
-        <div className="flex flex-wrap gap-2">
-          {assignedEngineers.map(eng => (
-            <div key={eng.id} className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5">
-              <div className="w-6 h-6 rounded-full bg-[#0f2035] text-white flex items-center justify-center text-[9px] font-bold">
-                {eng.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
-              </div>
-              <span className="text-xs font-medium text-slate-700">{eng.name}</span>
-              <span className="text-[10px] text-slate-400">{eng.position}</span>
-            </div>
-          ))}
-          {assignedEngineers.length === 0 && <p className="text-xs text-slate-400">No engineers assigned.</p>}
+      {/* B3.3 Cost Breakdown (read-only) */}
+      {(rfq.totalDirectCost > 0 || rfq.totalIndirectCost > 0) && (
+        <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 space-y-2 text-xs">
+          <p className="font-bold text-slate-700 uppercase tracking-wider mb-2">Table B3.3 — Cost Breakdown</p>
+          <div className="flex justify-between">
+            <span className="text-slate-600">Total Direct Cost (Table A)</span>
+            <span className="font-semibold tabular-nums">{(rfq.totalDirectCost||0).toLocaleString('th-TH')} Baht</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-slate-600">Total Indirect Cost (Table B)</span>
+            <span className="font-semibold tabular-nums">{(rfq.totalIndirectCost||0).toLocaleString('th-TH')} Baht</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-slate-600">Overhead + Profit ({rfq.overheadPct || 15}%)</span>
+            <span className="font-semibold tabular-nums text-orange-700">
+              {(((rfq.totalDirectCost||0)+(rfq.totalIndirectCost||0)) * ((rfq.overheadPct||15)/100)).toLocaleString('th-TH')} Baht
+            </span>
+          </div>
+          <div className="flex justify-between border-t-2 border-orange-300 pt-2">
+            <span className="font-bold text-slate-800">Grand Total (excl. VAT 7%)</span>
+            <span className="font-bold text-[#0f2035] text-sm tabular-nums">{(rfq.totalCost||0).toLocaleString('th-TH')} Baht</span>
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* WBS Summary */}
-      {rfq.wbsItems?.length > 0 && (
-        <div className="rounded-lg border border-slate-200 overflow-hidden">
+      {/* Activity Summary (from MHE) */}
+      {activityRows.length > 0 && (
+        <div className="rounded-xl border border-slate-200 overflow-hidden">
+          <div className="bg-slate-100 px-3 py-2">
+            <p className="text-xs font-bold text-slate-600 uppercase tracking-wider">Work Activities (from Manhour Estimate)</p>
+          </div>
           <table className="w-full text-xs">
-            <thead className="bg-slate-50 border-b border-slate-200">
+            <thead className="bg-slate-50 border-b border-slate-100">
               <tr>
-                <th className="px-3 py-2 text-left text-slate-500 font-semibold">Task</th>
-                <th className="px-3 py-2 text-right text-slate-500 font-semibold">Qty</th>
-                <th className="px-3 py-2 text-right text-slate-500 font-semibold">Total MH</th>
+                <th className="px-3 py-2 text-left text-slate-400 font-semibold">#</th>
+                <th className="px-3 py-2 text-left text-slate-400 font-semibold">Activity</th>
+                <th className="px-3 py-2 text-left text-slate-400 font-semibold">Type</th>
+                <th className="px-3 py-2 text-right text-slate-400 font-semibold">Qty</th>
+                <th className="px-3 py-2 text-right text-slate-400 font-semibold">Total MH</th>
+                <th className="px-3 py-2 text-left text-slate-400 font-semibold">Engineer</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {rfq.wbsItems.map(w => (
-                <tr key={w.id}>
-                  <td className="px-3 py-2 text-slate-700">{w.task}</td>
-                  <td className="px-3 py-2 text-right">{w.qty} {w.unit}</td>
-                  <td className="px-3 py-2 text-right font-semibold">{w.totalMH}</td>
+              {activityRows.map((w, i) => (
+                <tr key={w.id || i} className="hover:bg-slate-50">
+                  <td className="px-3 py-1.5 text-slate-400">{i+1}</td>
+                  <td className="px-3 py-1.5 font-medium text-slate-800">{w.activityName || w.task}</td>
+                  <td className="px-3 py-1.5 text-slate-500">{w.type || '—'}</td>
+                  <td className="px-3 py-1.5 text-right tabular-nums">{w.qty}</td>
+                  <td className="px-3 py-1.5 text-right font-semibold tabular-nums">{w.totalMH}</td>
+                  <td className="px-3 py-1.5 text-slate-500">{w.assignEngineer || '—'}</td>
                 </tr>
               ))}
             </tbody>
@@ -787,28 +1030,77 @@ function Stage4Form({ rfq, onSave, onClose }) {
         </div>
       )}
 
-      {/* Approval Note */}
+      {/* Comment History */}
+      {commentHistory.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1"><MessageSquare size={12} /> Review Comment History</p>
+          <div className="space-y-2 max-h-36 overflow-y-auto">
+            {commentHistory.map((c, i) => (
+              <div key={i} className={`rounded-lg px-3 py-2 text-xs border ${c.role === 'ppeManager' ? 'bg-blue-50 border-blue-200' : 'bg-amber-50 border-amber-200'}`}>
+                <p className="font-semibold text-slate-600">{c.role} — {c.date}</p>
+                <p className="text-slate-700 mt-0.5">{c.note}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Note (required for any action) */}
       <div>
-        <label className="block text-xs font-semibold text-slate-600 mb-1">Approval Note (optional)</label>
+        <label className="block text-xs font-semibold text-slate-600 mb-1">
+          Your Note / Comment <span className="text-red-500">*</span>
+        </label>
         <textarea rows={3} value={note} onChange={e => setNote(e.target.value)}
-          placeholder="Add remarks, conditions, or rejection reason…"
+          placeholder="Add your approval note, or comment to PPE Manager for revision…"
           className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg outline-none resize-none focus:border-blue-500 focus:ring-1 focus:ring-blue-200"
         />
       </div>
 
       <div className="flex justify-between gap-3 pt-2 border-t border-slate-100">
-        <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg">Close</button>
+        {/* Cancel RFQ */}
+        <button onClick={() => setShowConfirmCancel(true)}
+          className="px-4 py-2 text-sm font-medium text-red-600 border border-red-200 bg-red-50 hover:bg-red-100 rounded-lg flex items-center gap-2">
+          <XCircle size={15} /> Cancel RFQ
+        </button>
+
         <div className="flex gap-3">
-          <button onClick={() => onSave({ status: 'Rejected', approvalNote: note })}
-            className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg flex items-center gap-2">
-            <XCircle size={15} /> Reject
+          <button onClick={onClose}
+            className="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg">Close</button>
+
+          {/* Return to Manager for revision */}
+          <button
+            onClick={() => note.trim() && onSave({
+              status: 'Pending Manager',
+              costComments: [...commentHistory, { role: 'Requestor', date: new Date().toISOString().split('T')[0], note }],
+              approvalNote: note,
+            })}
+            disabled={!note.trim()}
+            className="px-4 py-2 text-sm font-medium text-amber-700 bg-amber-50 border border-amber-300 hover:bg-amber-100 rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
+            <ArrowRight size={14} className="rotate-180" /> Return to Manager
           </button>
-          <button onClick={() => onSave({ status: 'Approved', approvalNote: note })}
-            className="px-4 py-2 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg flex items-center gap-2">
-            <CheckCircle size={15} /> Approve
+
+          {/* Approve to Process */}
+          <button
+            onClick={() => note.trim() && onSave({
+              status: 'Approved to Process',
+              approvalNote: note,
+              costComments: [...commentHistory, { role: 'Requestor', date: new Date().toISOString().split('T')[0], note }],
+              approvedAt: new Date().toISOString().split('T')[0],
+            })}
+            disabled={!note.trim()}
+            className="px-4 py-2 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
+            <CheckCircle size={15} /> Approve to Process
           </button>
         </div>
       </div>
+
+      <ConfirmDialog
+        isOpen={showConfirmCancel}
+        onClose={() => setShowConfirmCancel(false)}
+        onConfirm={() => { onSave({ status: 'Cancelled', approvalNote: note }); onClose() }}
+        title="Cancel RFQ"
+        message={`Are you sure you want to cancel RFQ "${rfq.requestWorkNo}"? This cannot be undone.`}
+      />
     </div>
   )
 }
@@ -913,10 +1205,35 @@ function RFQDetail({ rfq, onClose }) {
 
 // ─── Shared RFQ Table ─────────────────────────────────────────────────────────
 
-function RFQTable({ rows, onAction, onDetail, actionLabel, actionColor, emptyMsg, canEdit }) {
+const ALL_STATUS_OPTIONS = [
+  'All', 'Pending Lead', 'Returned', 'Need Clarify', 'Pending MH',
+  'Pending Manager', 'Pending Approval', 'Approved to Process', 'Approved', 'Rejected', 'Cancelled',
+]
+
+const STATUS_CLS = {
+  'Pending Lead':       'bg-yellow-100 text-yellow-700',
+  'Returned':           'bg-orange-100 text-orange-700',
+  'Need Clarify':       'bg-pink-100 text-pink-700',
+  'Pending MH':         'bg-blue-100 text-blue-700',
+  'Pending Manager':    'bg-indigo-100 text-indigo-700',
+  'Pending Approval':   'bg-purple-100 text-purple-700',
+  'Approved to Process':'bg-green-200 text-green-800',
+  'Approved':           'bg-green-100 text-green-700',
+  'Rejected':           'bg-red-100 text-red-700',
+  'Cancelled':          'bg-slate-100 text-slate-500',
+}
+
+function StatusPill({ status }) {
+  return (
+    <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-semibold ${STATUS_CLS[status] || 'bg-slate-100 text-slate-600'}`}>
+      {status}
+    </span>
+  )
+}
+
+function RFQTable({ rows, onAction, onDetail, onEdit, onDelete, actionLabel, actionColor, emptyMsg, canEdit, showEditDelete }) {
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState('All')
-  const STATUS_OPTIONS = ['All', 'Pending Lead', 'Pending Manager', 'Pending Approval', 'Approved', 'Rejected', 'Cancelled']
 
   const filtered = useMemo(() => {
     let list = [...rows]
@@ -924,26 +1241,29 @@ function RFQTable({ rows, onAction, onDetail, actionLabel, actionColor, emptyMsg
     if (search.trim()) {
       const q = search.toLowerCase()
       list = list.filter(r =>
-        r.requestWorkNo.toLowerCase().includes(q) ||
-        r.client.toLowerCase().includes(q) ||
+        (r.requestWorkNo || '').toLowerCase().includes(q) ||
+        (r.client || '').toLowerCase().includes(q) ||
+        (r.requestor || '').toLowerCase().includes(q) ||
         (r.details || '').toLowerCase().includes(q)
       )
     }
-    return list.sort((a, b) => b.submittedAt.localeCompare(a.submittedAt))
+    return list.sort((a, b) => (b.submittedAt || '').localeCompare(a.submittedAt || ''))
   }, [rows, search, filterStatus])
+
+  const canDelete = (rfq) => !['Approved', 'Approved to Process'].includes(rfq.status)
 
   return (
     <div className="space-y-3">
       <div className="bg-white rounded-xl border border-slate-200 shadow-sm px-4 py-3 flex flex-wrap gap-3 items-center">
         <div className="relative flex-1 min-w-[200px]">
           <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input type="text" placeholder="Search work no., client…"
+          <input type="text" placeholder="Search work no., requestor, client…"
             value={search} onChange={e => setSearch(e.target.value)}
             className="w-full pl-9 pr-3 py-2 text-sm border border-slate-300 rounded-lg outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-200" />
         </div>
         <select value={filterStatus} onChange={e => setFilterStatus(e.target.value)}
           className="px-3 py-2 text-sm border border-slate-300 rounded-lg outline-none focus:border-blue-500 bg-white">
-          {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
+          {ALL_STATUS_OPTIONS.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
         <span className="text-xs text-slate-400">{filtered.length} records</span>
       </div>
@@ -953,8 +1273,8 @@ function RFQTable({ rows, onAction, onDetail, actionLabel, actionColor, emptyMsg
             <thead className="bg-slate-50 border-b border-slate-200">
               <tr>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Work No.</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Client</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Type</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Requestor</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Service</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Urgency</th>
                 <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">Plan MH</th>
                 <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">Cost Est.</th>
@@ -967,24 +1287,27 @@ function RFQTable({ rows, onAction, onDetail, actionLabel, actionColor, emptyMsg
               {filtered.length === 0 ? (
                 <tr><td colSpan={9} className="px-4 py-10 text-center text-slate-400 text-sm">{emptyMsg || 'No records found.'}</td></tr>
               ) : filtered.map(rfq => (
-                <tr key={rfq.id} className="hover:bg-slate-50 transition-colors">
-                  <td className="px-4 py-3 font-semibold text-[#0f2035]">{rfq.requestWorkNo}</td>
-                  <td className="px-4 py-3 text-slate-700 max-w-[140px] truncate">{rfq.client}</td>
+                <tr key={rfq.id} className={`hover:bg-slate-50 transition-colors ${rfq.status === 'Need Clarify' ? 'bg-pink-50' : rfq.status === 'Returned' ? 'bg-orange-50' : ''}`}>
+                  <td className="px-4 py-3 font-semibold text-[#0f2035] whitespace-nowrap">{rfq.requestWorkNo}</td>
+                  <td className="px-4 py-3 text-slate-700 max-w-[130px] truncate">{rfq.requestor || rfq.client || '—'}</td>
                   <td className="px-4 py-3">
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${rfq.type === 'CMG' ? 'bg-purple-100 text-purple-700' : 'bg-blue-100 text-blue-700'}`}>{rfq.type}</span>
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                      rfq.serviceType === 'CMG' || rfq.type === 'CMG' ? 'bg-purple-100 text-purple-700' :
+                      rfq.serviceType === 'PPE' ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-600'
+                    }`}>{rfq.serviceType || rfq.type || '—'}</span>
                   </td>
                   <td className="px-4 py-3">
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${URGENCY_CLS[rfq.urgency] || 'bg-slate-100 text-slate-600'}`}>{rfq.urgency}</span>
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${URGENCY_CLS[rfq.urgency] || 'bg-slate-100 text-slate-600'}`}>{rfq.urgency || '—'}</span>
                   </td>
                   <td className="px-4 py-3 text-right tabular-nums text-slate-700">{rfq.totalPlannedMH > 0 ? `${rfq.totalPlannedMH} MH` : '—'}</td>
                   <td className="px-4 py-3 text-right tabular-nums text-slate-700">{rfq.totalCost > 0 ? formatIDR(rfq.totalCost) : '—'}</td>
-                  <td className="px-4 py-3"><StatusBadge status={rfq.status} /></td>
-                  <td className="px-4 py-3 text-slate-500 text-xs">{rfq.submittedAt}</td>
+                  <td className="px-4 py-3"><StatusPill status={rfq.status} /></td>
+                  <td className="px-4 py-3 text-slate-500 text-xs whitespace-nowrap">{rfq.submittedAt}</td>
                   <td className="px-4 py-3">
-                    <div className="flex items-center justify-end gap-2">
+                    <div className="flex items-center justify-end gap-1">
                       {canEdit && onAction && (
                         <button onClick={() => onAction(rfq)}
-                          className={`px-3 py-1.5 text-xs font-semibold text-white rounded-lg transition-colors ${actionColor}`}>
+                          className={`px-2.5 py-1.5 text-xs font-semibold text-white rounded-lg transition-colors ${actionColor}`}>
                           {actionLabel}
                         </button>
                       )}
@@ -992,6 +1315,24 @@ function RFQTable({ rows, onAction, onDetail, actionLabel, actionColor, emptyMsg
                         className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors" title="View Details">
                         <Eye size={15} />
                       </button>
+                      {showEditDelete && onEdit && (
+                        <button onClick={() => onEdit(rfq)}
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-amber-600 hover:bg-amber-50 transition-colors" title="Edit RFQ">
+                          <Pencil size={15} />
+                        </button>
+                      )}
+                      {showEditDelete && onDelete && (
+                        canDelete(rfq) ? (
+                          <button onClick={() => onDelete(rfq)}
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors" title="Delete RFQ">
+                            <Trash2 size={15} />
+                          </button>
+                        ) : (
+                          <span className="p-1.5 rounded-lg text-slate-200 cursor-not-allowed" title="Cannot delete approved RFQ">
+                            <Trash2 size={15} />
+                          </span>
+                        )
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -1014,33 +1355,51 @@ const TABS = [
 ]
 
 export default function RFQ() {
-  const { rfqs, addRfq, updateRfq, currentRole } = useApp()
-  const [activeTab, setActiveTab]     = useState('request')
-  const [activeModal, setActiveModal] = useState(null)
+  const { rfqs, addRfq, updateRfq, deleteRfq, currentRole } = useApp()
+  const [activeTab, setActiveTab]         = useState('request')
+  const [activeModal, setActiveModal]     = useState(null)
+  const [deleteTarget, setDeleteTarget]   = useState(null)
 
-  const openModal = (type, rfq = null) => setActiveModal({ type, rfq })
+  const openModal  = (type, rfq = null) => setActiveModal({ type, rfq })
   const closeModal = () => setActiveModal(null)
 
-  const canCreateRfq  = true // Any authenticated user can submit an RFQ request
+  const handleDelete = (rfq) => setDeleteTarget(rfq)
+  const confirmDelete = async () => {
+    if (deleteTarget) { await deleteRfq(deleteTarget.id); setDeleteTarget(null) }
+  }
+
+  const canCreateRfq  = true
   const canPlanMH     = ['ppeLead', 'ppeAdmin'].includes(currentRole)
   const canCostEst    = ['ppeManager', 'ppeAdmin'].includes(currentRole)
   const canApprove    = ['Requestor', 'GM/MD', 'ppeAdmin'].includes(currentRole)
 
+  // Reset to a valid tab when the current one becomes inaccessible (e.g. ppeLead on 'cost')
+  React.useEffect(() => {
+    if (activeTab === 'cost' && currentRole === 'ppeLead') {
+      setActiveTab('manhour')
+    }
+  }, [currentRole, activeTab])
+
   // Per-tab filtered lists
-  const pendingLeadRfqs     = rfqs.filter(r => r.status === 'Pending Lead')
-  const returnedRfqs        = rfqs.filter(r => r.status === 'Returned')
-  const pendingMHRfqs       = rfqs.filter(r => r.status === 'Pending MH')
-  const pendingManagerRfqs  = rfqs.filter(r => r.status === 'Pending Manager')
-  const pendingApprovalRfqs = rfqs.filter(r => r.status === 'Pending Approval')
+  const pendingLeadRfqs       = rfqs.filter(r => r.status === 'Pending Lead')
+  const returnedRfqs          = rfqs.filter(r => r.status === 'Returned')
+  const needClarifyRfqs       = rfqs.filter(r => r.status === 'Need Clarify')
+  const pendingMHRfqs         = rfqs.filter(r => r.status === 'Pending MH')
+  const pendingManagerRfqs    = rfqs.filter(r => r.status === 'Pending Manager')
+  const pendingApprovalRfqs   = rfqs.filter(r => r.status === 'Pending Approval')
+  const approvedToProcessRfqs = rfqs.filter(r => r.status === 'Approved to Process')
+
+  // Cost tab hidden from ppeLead
+  const canSeeCostTab = !['ppeLead'].includes(currentRole) || currentRole === 'ppeAdmin'
 
   // Summary stats
   const stats = [
-    { label: 'Total RFQs',        value: rfqs.length,                                                                          cls: 'text-slate-800',  bg: 'bg-slate-50' },
-    { label: 'Pending Review',    value: pendingLeadRfqs.length,                                                                cls: 'text-yellow-600', bg: 'bg-yellow-50' },
-    { label: 'Returned',          value: returnedRfqs.length,                                                                   cls: 'text-orange-600', bg: 'bg-orange-50' },
-    { label: 'Pending MH Plan',   value: pendingMHRfqs.length,                                                                  cls: 'text-blue-600',   bg: 'bg-blue-50' },
-    { label: 'Pending Approval',  value: pendingApprovalRfqs.length,                                                           cls: 'text-purple-600', bg: 'bg-purple-50' },
-    { label: 'Approved',          value: rfqs.filter(r => r.status === 'Approved').length,                                     cls: 'text-green-600',  bg: 'bg-green-50' },
+    { label: 'Total RFQs',          value: rfqs.length,                  cls: 'text-slate-800',  bg: 'bg-slate-50' },
+    { label: 'Pending Review',       value: pendingLeadRfqs.length,       cls: 'text-yellow-600', bg: 'bg-yellow-50' },
+    { label: 'Need Clarify',         value: needClarifyRfqs.length,       cls: 'text-pink-600',   bg: 'bg-pink-50' },
+    { label: 'Pending MH Plan',      value: pendingMHRfqs.length,         cls: 'text-blue-600',   bg: 'bg-blue-50' },
+    { label: 'Pending Approval',     value: pendingApprovalRfqs.length,   cls: 'text-purple-600', bg: 'bg-purple-50' },
+    { label: 'Approved to Process',  value: approvedToProcessRfqs.length, cls: 'text-green-700',  bg: 'bg-green-50' },
   ]
 
   return (
@@ -1069,11 +1428,13 @@ export default function RFQ() {
           {TABS.map((tab, i) => {
             const Icon = tab.icon
             const isActive = activeTab === tab.id
+            // hide Cost tab from ppeLead
+            if (tab.id === 'cost' && !canSeeCostTab) return null
             // badge count per tab
-            const badge = tab.id === 'request' ? returnedRfqs.length
+            const badge = tab.id === 'request' ? (returnedRfqs.length + needClarifyRfqs.length)
               : tab.id === 'manhour' ? (pendingLeadRfqs.length + pendingMHRfqs.length)
               : tab.id === 'cost' ? pendingManagerRfqs.length
-              : tab.id === 'approval' ? pendingApprovalRfqs.length
+              : tab.id === 'approval' ? (pendingApprovalRfqs.length)
               : null
             return (
               <button
@@ -1106,13 +1467,18 @@ export default function RFQ() {
         {/* Tab Content */}
         <div className="p-5">
 
+          {/* Fallback: blank tab state guard */}
+          {!['request','manhour','cost','approval'].includes(activeTab) && (
+            <div className="py-10 text-center text-slate-400 text-sm">Select a tab above to continue.</div>
+          )}
+
           {/* ── Tab 1: Request ── */}
           {activeTab === 'request' && (
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="text-sm font-bold text-slate-700 flex items-center gap-2"><FileText size={15} className="text-[#0f2035]" /> Request</h3>
-                  <p className="text-xs text-slate-400 mt-0.5">All RFQ submissions. Returned RFQs can be revised and resubmitted.</p>
+                  <p className="text-xs text-slate-400 mt-0.5">All RFQ submissions. Requestor can edit/delete pending RFQs. Communicate with PPE Lead/Manager until agreed.</p>
                 </div>
                 <button
                   onClick={() => openModal('new')}
@@ -1122,22 +1488,46 @@ export default function RFQ() {
                 </button>
               </div>
 
-              {/* Returned RFQs — needs attention */}
-              {returnedRfqs.length > 0 && (
-                <div className="space-y-2">
+              {/* Need Clarify alert — PPE Lead/Manager requests info */}
+              {needClarifyRfqs.length > 0 && (
+                <div className="bg-pink-50 border border-pink-200 rounded-xl p-3 space-y-2">
                   <div className="flex items-center gap-2">
-                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-orange-100 text-orange-700 text-xs font-semibold">
-                      <XCircle size={11} /> {returnedRfqs.length} Returned — Needs Revision
-                    </span>
+                    <MessageSquare size={14} className="text-pink-600" />
+                    <span className="text-xs font-bold text-pink-700">{needClarifyRfqs.length} RFQ(s) need clarification — PPE Lead / Manager is requesting more information</span>
+                  </div>
+                  <RFQTable
+                    rows={needClarifyRfqs}
+                    onDetail={(rfq) => openModal('detail', rfq)}
+                    onAction={(rfq) => openModal('revise', rfq)}
+                    onEdit={(rfq) => openModal('edit', rfq)}
+                    onDelete={handleDelete}
+                    actionLabel="Respond & Resubmit"
+                    actionColor="bg-pink-600 hover:bg-pink-700"
+                    emptyMsg=""
+                    canEdit={true}
+                    showEditDelete={true}
+                  />
+                </div>
+              )}
+
+              {/* Returned RFQs — needs revision */}
+              {returnedRfqs.length > 0 && (
+                <div className="bg-orange-50 border border-orange-200 rounded-xl p-3 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <XCircle size={14} className="text-orange-600" />
+                    <span className="text-xs font-bold text-orange-700">{returnedRfqs.length} RFQ(s) returned — please revise and resubmit</span>
                   </div>
                   <RFQTable
                     rows={returnedRfqs}
                     onDetail={(rfq) => openModal('detail', rfq)}
                     onAction={(rfq) => openModal('revise', rfq)}
+                    onEdit={(rfq) => openModal('edit', rfq)}
+                    onDelete={handleDelete}
                     actionLabel="Revise & Resubmit"
                     actionColor="bg-orange-500 hover:bg-orange-600"
                     emptyMsg=""
                     canEdit={true}
+                    showEditDelete={true}
                   />
                 </div>
               )}
@@ -1148,9 +1538,12 @@ export default function RFQ() {
                 <RFQTable
                   rows={rfqs}
                   onDetail={(rfq) => openModal('detail', rfq)}
+                  onEdit={(rfq) => openModal('edit', rfq)}
+                  onDelete={handleDelete}
                   onAction={null}
                   emptyMsg="No RFQ submissions yet. Click 'New RFQ' to create one."
                   canEdit={false}
+                  showEditDelete={true}
                 />
               </div>
             </div>
@@ -1243,7 +1636,7 @@ export default function RFQ() {
               <div className="flex items-center justify-between">
                 <div>
                   <h3 className="text-sm font-bold text-slate-700 flex items-center gap-2"><BadgeCheck size={15} className="text-green-600" /> Approval</h3>
-                  <p className="text-xs text-slate-400 mt-0.5">RFQs with cost estimates ready for Requestor / GM/MD review and final approval.</p>
+                  <p className="text-xs text-slate-400 mt-0.5">Review cost estimate from PPE Manager. Approve to Process or return for revision. Comment loop until both agree.</p>
                 </div>
               </div>
               {!canApprove && (
@@ -1251,15 +1644,42 @@ export default function RFQ() {
                   You need <span className="font-semibold">Requestor</span>, <span className="font-semibold">GM/MD</span>, or <span className="font-semibold">PPE Admin</span> role to approve RFQs.
                 </div>
               )}
-              <RFQTable
-                rows={pendingApprovalRfqs}
-                onDetail={(rfq) => openModal('detail', rfq)}
-                onAction={canApprove ? (rfq) => openModal('stage4', rfq) : null}
-                actionLabel="Review & Approve"
-                actionColor="bg-green-600 hover:bg-green-700"
-                emptyMsg="No RFQs pending approval."
-                canEdit={canApprove}
-              />
+
+              {/* Pending review by Requestor */}
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-xs font-bold text-slate-600 uppercase tracking-wider">Awaiting Your Review</span>
+                  {pendingApprovalRfqs.length > 0 && (
+                    <span className="px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 text-[10px] font-bold">{pendingApprovalRfqs.length} pending</span>
+                  )}
+                </div>
+                <RFQTable
+                  rows={pendingApprovalRfqs}
+                  onDetail={(rfq) => openModal('detail', rfq)}
+                  onAction={canApprove ? (rfq) => openModal('stage4', rfq) : null}
+                  actionLabel="Review & Decide"
+                  actionColor="bg-green-600 hover:bg-green-700"
+                  emptyMsg="No RFQs pending your review."
+                  canEdit={canApprove}
+                />
+              </div>
+
+              {/* Approved to Process */}
+              {approvedToProcessRfqs.length > 0 && (
+                <div className="border-t border-slate-100 pt-4">
+                  <div className="flex items-center gap-2 mb-2">
+                    <CheckCircle size={14} className="text-green-600" />
+                    <span className="text-xs font-bold text-green-700 uppercase tracking-wider">Approved to Process ({approvedToProcessRfqs.length})</span>
+                  </div>
+                  <RFQTable
+                    rows={approvedToProcessRfqs}
+                    onDetail={(rfq) => openModal('detail', rfq)}
+                    onAction={null}
+                    emptyMsg=""
+                    canEdit={false}
+                  />
+                </div>
+              )}
             </div>
           )}
 
@@ -1277,6 +1697,33 @@ export default function RFQ() {
             closeModal()
           }}
         />
+      </Modal>
+
+      {/* Edit RFQ (only for non-Approved/non-Approved to Process) */}
+      <Modal isOpen={activeModal?.type === 'edit'} onClose={closeModal}
+        title={`Edit RFQ — ${activeModal?.rfq?.requestWorkNo || ''}`} size="lg">
+        {activeModal?.rfq && (
+          ['Approved', 'Approved to Process'].includes(activeModal.rfq.status) ? (
+            <div className="px-6 py-8 text-center text-slate-500">
+              <CheckCircle size={32} className="mx-auto text-green-500 mb-3" />
+              <p className="font-semibold">This RFQ is {activeModal.rfq.status}</p>
+              <p className="text-xs mt-1">RFQs that have been approved cannot be edited or deleted.</p>
+              <button onClick={closeModal} className="mt-4 px-4 py-2 text-sm bg-slate-100 rounded-lg">Close</button>
+            </div>
+          ) : (
+            <>
+              <div className="px-6 pt-4"><Stepper status={activeModal.rfq.status} /></div>
+              <Stage1Form
+                initial={activeModal.rfq}
+                onClose={closeModal}
+                onSave={(form) => {
+                  updateRfq(activeModal.rfq.id, { ...form })
+                  closeModal()
+                }}
+              />
+            </>
+          )
+        )}
       </Modal>
 
       {/* Revise & Resubmit (Returned RFQs) */}
@@ -1340,7 +1787,7 @@ export default function RFQ() {
             <div className="px-6 pt-5"><Stepper status={activeModal.rfq.status} /></div>
             <Stage3Form rfq={activeModal.rfq} onClose={closeModal}
               onSave={(data) => { updateRfq(activeModal.rfq.id, data); closeModal() }}
-              onCancel={() => updateRfq(activeModal.rfq.id, { status: 'Cancelled' })} />
+              onCancel={() => { updateRfq(activeModal.rfq.id, { status: 'Cancelled' }); closeModal() }} />
           </>
         )}
       </Modal>
@@ -1362,6 +1809,17 @@ export default function RFQ() {
         title={`RFQ Details — ${activeModal?.rfq?.requestWorkNo || ''}`} size="lg">
         {activeModal?.rfq && <RFQDetail rfq={activeModal.rfq} onClose={closeModal} />}
       </Modal>
+
+      {/* Delete Confirm */}
+      <ConfirmDialog
+        isOpen={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={confirmDelete}
+        title="Delete RFQ"
+        message={`Are you sure you want to delete RFQ "${deleteTarget?.requestWorkNo}"? This action cannot be undone.`}
+        confirmLabel="Delete"
+        confirmClass="bg-red-600 hover:bg-red-700 text-white"
+      />
     </div>
   )
 }

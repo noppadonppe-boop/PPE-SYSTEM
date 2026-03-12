@@ -29,7 +29,7 @@ const NAV_ITEMS = [
     id: 'master',
     label: 'Master Data',
     icon: Database,
-    roles: ['ppeTeam', 'ppeLeader', 'ppeManager', 'ppeAdmin', 'MasterAdmin', 'SenEng', 'Eng'],
+    roles: ['ppeLead', 'ppeManager', 'ppeAdmin', 'ppeTeam'],
     children: [
       {
         id: 'unit-rates',
@@ -41,7 +41,7 @@ const NAV_ITEMS = [
         id: 'team-rates',
         label: 'Team Hourly Rate',
         path: '/master/team-rates',
-        roles: ['ppeLeader', 'ppeManager', 'ppeAdmin', 'MasterAdmin'],
+        roles: ['ppeLead', 'ppeManager', 'ppeAdmin'],
       },
     ],
   },
@@ -50,35 +50,35 @@ const NAV_ITEMS = [
     label: 'RFQ & Estimation',
     icon: FileText,
     path: '/rfq',
-    roles: ['Requestors', 'ppeLeader', 'ppeManager', 'ppeAdmin', 'MasterAdmin', 'SenEng', 'Eng'],
+    roles: null,
   },
   {
     id: 'work-orders',
     label: 'Work Execution',
     icon: ClipboardList,
     path: '/work-orders',
-    roles: ['ppeTeam', 'ppeLeader', 'ppeManager', 'ppeAdmin', 'MasterAdmin'],
+    roles: ['ppeLead', 'ppeManager', 'ppeAdmin', 'ppeTeam'],
   },
   {
     id: 'daily-report',
     label: 'Daily Report',
     icon: BookOpen,
     path: '/daily-report',
-    roles: ['ppeTeam', 'ppeLeader', 'ppeManager', 'ppeAdmin', 'MasterAdmin'],
+    roles: ['ppeLead', 'ppeManager', 'ppeAdmin', 'ppeTeam'],
   },
   {
     id: 'report-summary',
     label: 'Report Summary',
     icon: BarChart3,
     path: '/report-summary',
-    roles: ['ppeLeader', 'ppeManager', 'ppeAdmin', 'MasterAdmin'],
+    roles: ['ppeLead', 'ppeManager', 'ppeAdmin'],
   },
   {
     id: 'admin',
     label: 'Admin Panel',
     icon: Shield,
     path: '/admin',
-    roles: ['ppeAdmin', 'MasterAdmin'],
+    roles: ['ppeAdmin'],
   },
 ]
 

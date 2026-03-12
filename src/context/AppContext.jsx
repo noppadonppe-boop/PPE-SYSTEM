@@ -16,11 +16,11 @@ const subDocRef = (name, id) => doc(db, ROOT_COL, ROOT_DOC, name, id)
 
 export const ROLES = [
   { id: 'Requestor', label: 'Requestor' },
-  { id: 'ppeLead', label: 'PPE Lead' },
-  { id: 'ppeManager', label: 'PPE Manager' },
-  { id: 'ppeTeam', label: 'PPE Team' },
-  { id: 'ppeAdmin', label: 'PPE Admin' },
-  { id: 'GM/MD', label: 'GM / MD' },
+  { id: 'ppeLead',    label: 'ppeLead' },
+  { id: 'ppeManager', label: 'ppeManager' },
+  { id: 'ppeTeam',    label: 'ppeTeam' },
+  { id: 'ppeAdmin',   label: 'ppeAdmin' },
+  { id: 'GM/MD',      label: 'GM/MD' },
 ]
 
 // ─── CONTEXT ─────────────────────────────────────────────────────────────────
@@ -127,6 +127,9 @@ export function AppProvider({ children }) {
   }
   const updateRfq = async (id, data) => {
     await updateDoc(subDocRef('rfqs', id), data)
+  }
+  const deleteRfq = async (id) => {
+    await deleteDoc(subDocRef('rfqs', id))
   }
 
   // ── Work Order CRUD ─────────────────────────────────────────────────────
@@ -245,7 +248,7 @@ export function AppProvider({ children }) {
     currentRole, setCurrentRole,
     unitRates, addUnitRate, updateUnitRate, deleteUnitRate,
     teamRates, addTeamRate, updateTeamRate, deleteTeamRate,
-    rfqs, addRfq, updateRfq,
+    rfqs, addRfq, updateRfq, deleteRfq,
     workOrders, addWorkOrder, updateWorkOrder,
     dailyReports, addDailyReport, updateDailyReport,
     getTeamMemberById,

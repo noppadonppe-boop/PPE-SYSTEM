@@ -80,7 +80,7 @@ function AppRoutes() {
 
           {/* ── Admin only ── */}
           <Route path="admin" element={
-            <ProtectedRoute requireApproved requireRoles={['MasterAdmin', 'ppeAdmin']}>
+            <ProtectedRoute requireApproved requireRoles={['ppeAdmin']}>
               <AdminPanel />
             </ProtectedRoute>
           } />

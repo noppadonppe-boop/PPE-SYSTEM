@@ -16,7 +16,7 @@ const POSITIONS = [
   'Admin',
 ]
 
-const ALLOWED_ROLES = ['ppeLead', 'ppeManager', 'ppeAdmin']
+const ALLOWED_ROLES = ['ppeLead', 'ppeManager', 'ppeAdmin', 'GM/MD']
 
 const EMPTY_FORM = { name: '', position: 'Engineer', ratePerHour: '' }
 
