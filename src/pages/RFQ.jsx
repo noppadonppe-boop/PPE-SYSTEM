@@ -10,6 +10,7 @@ import { useApp } from '../context/AppContext'
 import Modal from '../components/ui/Modal'
 import ConfirmDialog from '../components/ui/ConfirmDialog'
 import StatusBadge from '../components/ui/StatusBadge'
+import QuotationPreview from '../components/QuotationPreview'
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -158,15 +159,19 @@ function LeadReceiveForm({ rfq, onAccept, onReturn, onClose }) {
 
 // ─── File Upload Field ────────────────────────────────────────────────────────
 
-function FileUploadField({ label, accept, icon, names = [], onChange, isImage }) {
+function FileUploadField({ label, accept, icon, files = [], onChange, isImage }) {
   const ref = useRef(null)
   const handleFiles = (e) => {
-    const files = Array.from(e.target.files)
-    const newNames = files.map(f => f.name)
-    onChange([...names, ...newNames])
+    const selected = Array.from(e.target.files)
+    const readers = selected.map(f => new Promise(resolve => {
+      const r = new FileReader()
+      r.onload = () => resolve({ name: f.name, url: r.result })
+      r.readAsDataURL(f)
+    }))
+    Promise.all(readers).then(newFiles => onChange([...files, ...newFiles]))
     e.target.value = ''
   }
-  const remove = (i) => onChange(names.filter((_, idx) => idx !== i))
+  const remove = (i) => onChange(files.filter((_, idx) => idx !== i))
   return (
     <div>
       <label className="block text-xs font-semibold text-slate-600 mb-1 flex items-center gap-1">
@@ -180,11 +185,11 @@ function FileUploadField({ label, accept, icon, names = [], onChange, isImage })
         <p className="text-[10px] text-slate-300 mt-0.5">{accept.replace(/\./g, '').toUpperCase()}</p>
       </div>
       <input ref={ref} type="file" accept={accept} multiple className="hidden" onChange={handleFiles} />
-      {names.length > 0 && (
+      {files.length > 0 && (
         <ul className="mt-2 space-y-1">
-          {names.map((n, i) => (
+          {files.map((f, i) => (
             <li key={i} className="flex items-center justify-between bg-white border border-slate-200 rounded-lg px-2 py-1 text-xs">
-              <span className="truncate text-slate-700 max-w-[140px]" title={n}>{isImage ? '🖼 ' : '📎 '}{n}</span>
+              <span className="truncate text-slate-700 max-w-[140px]" title={f.name}>{isImage ? '🖼 ' : '📎 '}{f.name}</span>
               <button onClick={() => remove(i)} className="ml-2 text-slate-400 hover:text-red-500 flex-shrink-0"><XCircle size={13} /></button>
             </li>
           ))}
@@ -213,11 +218,11 @@ const EMPTY_RFQ_FORM = {
   s3WorkKind:     '',
   details:        '',
   linkUrl:        '',
-  attachmentNames: [],
-  photoNames:     [],
+  attachments:    [],
+  photos:         [],
 }
 
-function Stage1Form({ onSave, onClose, initial, isRevise }) {
+function Stage1Form({ onSave, onSaveDraft, onClose, initial, isRevise }) {
   const [form, setForm] = useState(initial || EMPTY_RFQ_FORM)
   const [errors, setErrors] = useState({})
   const [revisionNote, setRevisionNote] = useState('')
@@ -435,16 +440,16 @@ function Stage1Form({ onSave, onClose, initial, isRevise }) {
           label="Upload Documents / Files"
           accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.zip"
           icon={<Upload size={14} />}
-          names={form.attachmentNames}
-          onChange={names => set('attachmentNames', names)}
+          files={form.attachments}
+          onChange={files => set('attachments', files)}
         />
         {/* Photo Upload */}
         <FileUploadField
           label="Upload Photos / Images"
           accept="image/*"
           icon={<Image size={14} />}
-          names={form.photoNames}
-          onChange={names => set('photoNames', names)}
+          files={form.photos}
+          onChange={files => set('photos', files)}
           isImage
         />
       </div>
@@ -476,12 +481,20 @@ function Stage1Form({ onSave, onClose, initial, isRevise }) {
         </div>
       )}
 
-      <div className="flex justify-end gap-3 pt-2 border-t border-slate-100">
+      <div className="flex justify-between gap-3 pt-2 border-t border-slate-100">
         <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg">Cancel</button>
-        <button onClick={() => validate() && onSave(form, revisionNote)}
-          className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg flex items-center gap-2">
-          Submit RFQ <ArrowRight size={14} />
-        </button>
+        <div className="flex gap-3">
+          {onSaveDraft && (
+            <button onClick={() => onSaveDraft(form)}
+              className="px-4 py-2 text-sm font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-lg flex items-center gap-2">
+              <Save size={14} /> Save Draft
+            </button>
+          )}
+          <button onClick={() => validate() && onSave(form, revisionNote)}
+            className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg flex items-center gap-2">
+            Submit RFQ <ArrowRight size={14} />
+          </button>
+        </div>
       </div>
     </div>
   )
@@ -499,7 +512,8 @@ function genMheNo(rfq) {
 const EMPTY_MHE_ROW = { activityName: '', type: 'Drawing', additionalInfo: '', qty: '', unitMH: '', assignEngineer: '', note: '' }
 
 function Stage2Form({ rfq, onSave, onSaveDraft, onClose }) {
-  const { teamRates } = useApp()
+  const { teamRates, unitRates } = useApp()
+  const [showUnitRef, setShowUnitRef] = useState(false)
   const [mheNo]        = useState(rfq.mheNo || genMheNo(rfq))
   const [dateStart,      setDateStart]      = useState(rfq.dateStart      || '')
   const [dateCompletion, setDateCompletion] = useState(rfq.dateCompletion || '')
@@ -654,6 +668,15 @@ function Stage2Form({ rfq, onSave, onSaveDraft, onClose }) {
             <ClipboardList size={15} /> Manhour Estimate Table
           </h3>
           <div className="flex items-center gap-2">
+            {/* Unit Rate Reference */}
+            <button onClick={() => setShowUnitRef(v => !v)}
+              className={`flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium border rounded-lg transition-colors ${
+                showUnitRef
+                  ? 'text-white bg-purple-600 border-purple-600'
+                  : 'text-purple-700 bg-purple-50 hover:bg-purple-100 border-purple-300'
+              }`}>
+              <ClipboardList size={12} /> Unit Rate Ref
+            </button>
             {/* Template */}
             <button onClick={downloadTemplate}
               className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-lg">
@@ -801,6 +824,68 @@ function Stage2Form({ rfq, onSave, onSaveDraft, onClose }) {
         )}
       </div>
 
+      {/* Unit Rate Reference Panel */}
+      {showUnitRef && (
+        <div className="border border-purple-200 rounded-xl overflow-hidden">
+          <div className="bg-purple-700 text-white px-4 py-2.5 flex items-center justify-between">
+            <span className="text-xs font-bold uppercase tracking-wider flex items-center gap-2">
+              <ClipboardList size={13} /> Unit Rate Manhour Reference
+            </span>
+            <button onClick={() => setShowUnitRef(false)}
+              className="text-purple-200 hover:text-white transition-colors">
+              <XCircle size={15} />
+            </button>
+          </div>
+          <div className="overflow-x-auto max-h-64 overflow-y-auto">
+            <table className="w-full text-xs" style={{ minWidth: 700 }}>
+              <thead className="bg-purple-50 sticky top-0">
+                <tr>
+                  <th className="px-3 py-2 text-left font-semibold text-purple-800 border-b border-purple-200">Category</th>
+                  <th className="px-3 py-2 text-left font-semibold text-purple-800 border-b border-purple-200">Task</th>
+                  <th className="px-3 py-2 text-left font-semibold text-purple-800 border-b border-purple-200">Unit</th>
+                  <th className="px-3 py-2 text-right font-semibold text-purple-800 border-b border-purple-200">Min</th>
+                  <th className="px-3 py-2 text-right font-semibold text-purple-800 border-b border-purple-200">Avg</th>
+                  <th className="px-3 py-2 text-right font-semibold text-purple-800 border-b border-purple-200">Max</th>
+                  <th className="px-3 py-2 text-center font-semibold text-purple-800 border-b border-purple-200">Difficulty</th>
+                  <th className="px-3 py-2 text-right font-semibold text-purple-800 border-b border-purple-200">Adjust MH</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-purple-50">
+                {unitRates.length === 0 && (
+                  <tr><td colSpan={8} className="px-3 py-4 text-center text-slate-400">No unit rate data available.</td></tr>
+                )}
+                {unitRates.map((ur, i) => (
+                  <tr key={ur.id || i} className="hover:bg-purple-50 transition-colors">
+                    <td className="px-3 py-1.5 text-slate-500">{ur.category || '—'}</td>
+                    <td className="px-3 py-1.5 font-medium text-slate-800">{ur.task || '—'}</td>
+                    <td className="px-3 py-1.5 text-slate-500">{ur.unit || '—'}</td>
+                    <td className="px-3 py-1.5 text-right tabular-nums text-slate-600">{ur.min != null ? (+ur.min).toFixed(2) : '—'}</td>
+                    <td className="px-3 py-1.5 text-right tabular-nums font-semibold text-[#0f2035]">{ur.avg != null ? (+ur.avg).toFixed(2) : '—'}</td>
+                    <td className="px-3 py-1.5 text-right tabular-nums text-slate-600">{ur.max != null ? (+ur.max).toFixed(2) : '—'}</td>
+                    <td className="px-3 py-1.5 text-center">
+                      {ur.difficultyFactor ? (
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                          ur.difficultyFactor === 'Easy'   ? 'bg-green-100 text-green-700' :
+                          ur.difficultyFactor === 'Hard'   ? 'bg-red-100 text-red-700' :
+                          'bg-blue-100 text-blue-700'
+                        }`}>{ur.difficultyFactor}</span>
+                      ) : <span className="text-slate-300">—</span>}
+                    </td>
+                    <td className={`px-3 py-1.5 text-right tabular-nums font-semibold ${
+                      ur.difficultyFactor === 'Easy' ? 'text-green-700' :
+                      ur.difficultyFactor === 'Hard' ? 'text-red-700' :
+                      ur.difficultyFactor === 'Normal' ? 'text-blue-700' : 'text-slate-400'
+                    }`}>
+                      {ur.adjustUnitMH != null ? (+ur.adjustUnitMH).toFixed(2) : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       <div className="flex justify-between gap-3 pt-2 border-t border-slate-100 flex-wrap">
         <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg">Cancel</button>
         <div className="flex items-center gap-2">
@@ -827,7 +912,7 @@ function Stage2Form({ rfq, onSave, onSaveDraft, onClose }) {
 
 const EMPTY_INDIRECT = { description: '', unit: '', rate: '', qty: '', note: '' }
 
-function Stage3Form({ rfq, onSave, onClose, onCancel }) {
+function Stage3Form({ rfq, onSave, onSaveDraft, onClose, onCancel }) {
   // Direct cost rows come from MHE rows — PPE Manager adds Rate per row
   const mheRows = rfq.mheRows || rfq.wbsItems || []
   const [directRows, setDirectRows] = useState(() =>
@@ -841,7 +926,7 @@ function Stage3Form({ rfq, onSave, onClose, onCancel }) {
           unitMH: r.unitMH || 0,
           totalMH: r.totalMH || 0,
           assignEngineer: r.assignEngineer || '',
-          rate: '',
+          rate: rfq.directCostRows ? '' : (r.rate || ''),
           totalCost: 0,
           note: r.note || '',
         }))
@@ -852,8 +937,10 @@ function Stage3Form({ rfq, onSave, onClose, onCancel }) {
       : [{ ...EMPTY_INDIRECT, id: `ind-${Date.now()}` }]
   )
   const [overheadPct, setOverheadPct] = useState(rfq.overheadPct ?? 15)
-  const [submitNote, setSubmitNote]   = useState('')
+  const [submitNote, setSubmitNote]   = useState(rfq.costDraftNote || '')
   const [showConfirmCancel, setShowConfirmCancel] = useState(false)
+  const [draftSaved, setDraftSaved]   = useState(false)
+  const [showQuotePreview, setShowQuotePreview] = useState(false)
 
   // Comment history
   const commentHistory = rfq.costComments || []
@@ -890,6 +977,24 @@ function Stage3Form({ rfq, onSave, onClose, onCancel }) {
   const grandTotal   = +(totalAB + overheadAmt).toFixed(2)
 
   const canSubmit = directRows.some(r => parseFloat(r.rate) > 0) && submitNote.trim()
+
+  const buildCostPayload = () => ({
+    directCostRows:   directRows,
+    indirectCostRows: indirectRows,
+    overheadPct,
+    totalDirectCost:   totalDirect,
+    totalIndirectCost: totalIndirect,
+    totalCost:         grandTotal,
+    costDraftNote:     submitNote,
+  })
+
+  const handleSaveDraft = () => {
+    if (onSaveDraft) {
+      onSaveDraft(buildCostPayload())
+      setDraftSaved(true)
+      setTimeout(() => setDraftSaved(false), 2500)
+    }
+  }
 
   return (
     <div className="px-6 py-5 space-y-6 max-h-[80vh] overflow-y-auto">
@@ -1100,21 +1205,25 @@ function Stage3Form({ rfq, onSave, onClose, onCancel }) {
         />
       </div>
 
-      <div className="flex justify-between gap-3 pt-2 border-t border-slate-100">
+      <div className="flex justify-between gap-3 pt-2 border-t border-slate-100 flex-wrap">
         <button onClick={() => setShowConfirmCancel(true)}
           className="px-4 py-2 text-sm font-medium text-red-600 border border-red-200 bg-red-50 hover:bg-red-100 rounded-lg flex items-center gap-2">
           <XCircle size={15} /> Cancel RFQ
         </button>
-        <div className="flex gap-3">
+        <div className="flex gap-3 flex-wrap">
           <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg">Close</button>
+          <button onClick={() => setShowQuotePreview(true)}
+            className="px-4 py-2 text-sm font-medium text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-300 rounded-lg flex items-center gap-2">
+            <FileText size={14} /> Preview Quotation
+          </button>
+          <button onClick={handleSaveDraft}
+            className="px-4 py-2 text-sm font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded-lg flex items-center gap-2">
+            <Save size={14} />
+            {draftSaved ? 'Saved ✓' : 'Save Draft'}
+          </button>
           <button
             onClick={() => canSubmit && onSave({
-              directCostRows: directRows,
-              indirectCostRows: indirectRows,
-              overheadPct,
-              totalDirectCost: totalDirect,
-              totalIndirectCost: totalIndirect,
-              totalCost: grandTotal,
+              ...buildCostPayload(),
               costComments: [...commentHistory, { role: 'ppeManager', date: new Date().toISOString().split('T')[0], note: submitNote }],
               status: 'Pending Approval',
             })}
@@ -1132,6 +1241,20 @@ function Stage3Form({ rfq, onSave, onClose, onCancel }) {
         title="Cancel RFQ"
         message="Are you sure you want to cancel this RFQ? This cannot be undone."
       />
+
+      {/* Quotation Preview Overlay */}
+      {showQuotePreview && (
+        <QuotationPreview
+          rfq={rfq}
+          directRows={directRows}
+          indirectRows={indirectRows}
+          overheadPct={overheadPct}
+          totalDirect={totalDirect}
+          totalIndirect={totalIndirect}
+          grandTotal={grandTotal}
+          onClose={() => setShowQuotePreview(false)}
+        />
+      )}
     </div>
   )
 }
@@ -1302,95 +1425,210 @@ function Stage4Form({ rfq, onSave, onClose }) {
 
 // ─── Detail View Modal (read-only for other roles) ────────────────────────────
 
-function RFQDetail({ rfq, onClose }) {
+function RFQDetail({ rfq, onClose, role }) {
   const { teamRates } = useApp()
   const assignedEngineers = (rfq.assignedEngineers || [])
     .map(id => teamRates.find(t => t.id === id)).filter(Boolean)
+  const canSeeCost = ['ppeManager', 'ppeAdmin', 'MasterAdmin', 'GM/MD'].includes(role)
 
-  const InfoRow = ({ label, value }) => (
-    <div>
-      <p className="text-xs text-slate-400 font-medium">{label}</p>
-      <p className="text-sm font-semibold text-slate-800">{value || '—'}</p>
+  const Field = ({ label, value, span = 1 }) => (
+    <div className={span === 2 ? 'col-span-2' : ''}>
+      <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-0.5">{label}</p>
+      <p className="text-sm font-semibold text-slate-800 leading-snug">{value || <span className="text-slate-300 font-normal">—</span>}</p>
     </div>
   )
 
+  const URGENCY_COLOR = { Urgent: 'bg-red-100 text-red-700', High: 'bg-orange-100 text-orange-700', Normal: 'bg-blue-100 text-blue-700', Low: 'bg-slate-100 text-slate-600' }
+  const STATUS_COLOR  = {
+    'Pending Lead': 'bg-yellow-100 text-yellow-700', 'Returned': 'bg-orange-100 text-orange-700',
+    'Need Clarify': 'bg-pink-100 text-pink-700', 'Pending MH': 'bg-blue-100 text-blue-700',
+    'Pending Manager': 'bg-indigo-100 text-indigo-700', 'Pending Approval': 'bg-purple-100 text-purple-700',
+    'Approved to Process': 'bg-green-200 text-green-800', 'Approved': 'bg-green-100 text-green-700',
+    'Rejected': 'bg-red-100 text-red-700', 'Cancelled': 'bg-slate-100 text-slate-500',
+  }
+
   return (
-    <div className="px-6 py-5 space-y-4 max-h-[75vh] overflow-y-auto">
+    <div className="px-6 py-5 space-y-4 max-h-[78vh] overflow-y-auto">
 
-      {/* Request Info */}
-      <div className="bg-slate-50 rounded-xl border border-slate-200 p-4 space-y-3">
-        <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Request Information</p>
-        <div className="grid grid-cols-3 gap-3">
-          <InfoRow label="Date Request Work" value={rfq.dateRequest} />
-          <InfoRow label="Type of Service" value={rfq.serviceType} />
-          <InfoRow label="Request Work No." value={rfq.requestWorkNo} />
+      {/* Status bar */}
+      <div className="flex items-center justify-between bg-slate-50 rounded-xl border border-slate-200 px-4 py-3">
+        <div className="flex items-center gap-3">
+          <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">Status</span>
+          <span className={`px-3 py-1 rounded-full text-xs font-bold ${STATUS_COLOR[rfq.status] || 'bg-slate-100 text-slate-600'}`}>{rfq.status}</span>
         </div>
-        <div className="grid grid-cols-3 gap-3">
-          <InfoRow label="Requestor" value={rfq.requestor} />
-          <InfoRow label="E-mail" value={rfq.emailRequestor} />
-          <InfoRow label="Tel." value={rfq.tel} />
-        </div>
-        <div className="grid grid-cols-3 gap-3">
-          <InfoRow label="Project No." value={rfq.projectNo} />
-          <InfoRow label="Client / Owner" value={rfq.client} />
-          <InfoRow label="Urgency" value={rfq.urgency} />
+        <div className="flex gap-4 text-xs text-slate-500">
+          <span>Submitted: <strong className="text-slate-700">{rfq.submittedAt || '—'}</strong></span>
+          {rfq.receivedDate && <span>Received: <strong className="text-slate-700">{rfq.receivedDate}</strong></span>}
         </div>
       </div>
 
-      {/* Scope Classification */}
-      <div className="bg-slate-50 rounded-xl border border-slate-200 p-4 space-y-3">
-        <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">Scope Classification</p>
-        <div className="grid grid-cols-3 gap-3">
-          <InfoRow label="S1 : สถานที่ทำงาน" value={rfq.s1Location} />
-          <InfoRow label="S2 : ประเภทงาน" value={rfq.s2WorkType} />
-          <InfoRow label="S3 : ชนิดงาน" value={rfq.s3WorkKind} />
+      {/* ── Section 1: Request Information ── */}
+      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+        <div className="bg-[#0f2035] px-4 py-2">
+          <p className="text-[10px] font-bold text-white uppercase tracking-widest">Request Information</p>
+        </div>
+        <div className="p-4 grid grid-cols-3 gap-x-6 gap-y-4">
+          <Field label="Date Request Work" value={rfq.dateRequest} />
+          <Field label="Type of Service"   value={rfq.serviceType} />
+          <Field label="Request Work No."  value={rfq.requestWorkNo} />
+          <Field label="Requestor"         value={rfq.requestor} />
+          <Field label="E-mail Requestor"  value={rfq.emailRequestor} />
+          <Field label="Tel."              value={rfq.tel} />
+          <Field label="Project No."       value={rfq.projectNo} />
+          <Field label="Client / Project Owner" value={rfq.client} />
+          <div>
+            <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-0.5">Urgency</p>
+            <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${URGENCY_COLOR[rfq.urgency] || 'bg-slate-100 text-slate-600'}`}>
+              {rfq.urgency || '—'}
+            </span>
+          </div>
         </div>
       </div>
 
-      {/* Status */}
-      <div className="grid grid-cols-2 gap-3">
-        <InfoRow label="Submitted Date" value={rfq.submittedAt} />
-        <InfoRow label="Status" value={rfq.status} />
+      {/* ── Section 2: Scope Classification ── */}
+      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+        <div className="bg-slate-700 px-4 py-2">
+          <p className="text-[10px] font-bold text-white uppercase tracking-widest">Scope Classification</p>
+        </div>
+        <div className="p-4 grid grid-cols-3 gap-x-6 gap-y-4">
+          <Field label="S1 : สถานที่ทำงาน" value={rfq.s1Location} />
+          <Field label="S2 : ประเภทงาน"   value={rfq.s2WorkType} />
+          <Field label="S3 : ชนิดงาน"     value={rfq.s3WorkKind} />
+        </div>
       </div>
 
-      {rfq.details && (
-        <div>
-          <p className="text-xs text-slate-400 font-medium mb-1">Scope of Work / Details</p>
-          <p className="text-sm text-slate-700 bg-slate-50 rounded-lg p-3 border border-slate-200">{rfq.details}</p>
+      {/* ── Section 3: Scope of Work / Details ── */}
+      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+        <div className="bg-blue-700 px-4 py-2">
+          <p className="text-[10px] font-bold text-white uppercase tracking-widest">Scope of Work / Details</p>
+        </div>
+        <div className="p-4">
+          {rfq.details
+            ? <p className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">{rfq.details}</p>
+            : <p className="text-sm text-slate-400 italic">No scope details provided.</p>
+          }
+        </div>
+      </div>
+
+      {/* ── Section 3b: Attachments & References ── */}
+      {(rfq.linkUrl || (rfq.attachments && rfq.attachments.length > 0) || (rfq.photos && rfq.photos.length > 0)) && (
+        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+          <div className="bg-indigo-700 px-4 py-2">
+            <p className="text-[10px] font-bold text-white uppercase tracking-widest">Attachments &amp; References</p>
+          </div>
+          <div className="p-4 space-y-5">
+            {/* Reference URL */}
+            {rfq.linkUrl && (
+              <div>
+                <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-1.5">Reference / Drawing URL</p>
+                <a href={rfq.linkUrl} target="_blank" rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 text-sm text-blue-600 hover:text-blue-800 hover:underline break-all">
+                  <Link2 size={13} className="flex-shrink-0" />{rfq.linkUrl}
+                </a>
+              </div>
+            )}
+            {/* Documents — clickable download */}
+            {rfq.attachments && rfq.attachments.length > 0 && (
+              <div>
+                <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Upload Documents / Files</p>
+                <div className="flex flex-wrap gap-2">
+                  {rfq.attachments.map((f, i) => (
+                    <a key={i} href={f.url} download={f.name} target="_blank" rel="noopener noreferrer"
+                      className="flex items-center gap-1.5 text-xs bg-slate-50 text-slate-700 border border-slate-200 hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700 px-3 py-2 rounded-lg font-medium transition-colors cursor-pointer">
+                      <FileText size={12} className="flex-shrink-0" />
+                      <span className="max-w-[180px] truncate" title={f.name}>{f.name}</span>
+                      <span className="text-[9px] text-slate-400 ml-1 uppercase">↓</span>
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
+            {/* Photos — inline thumbnails */}
+            {rfq.photos && rfq.photos.length > 0 && (
+              <div>
+                <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Upload Photos / Images</p>
+                <div className="flex flex-wrap gap-3">
+                  {rfq.photos.map((f, i) => (
+                    <a key={i} href={f.url} target="_blank" rel="noopener noreferrer"
+                      className="group relative block rounded-lg overflow-hidden border border-slate-200 hover:border-blue-400 transition-colors" style={{ width: 80, height: 80 }}>
+                      <img src={f.url} alt={f.name}
+                        className="w-full h-full object-cover group-hover:opacity-90 transition-opacity" />
+                      <div className="absolute bottom-0 left-0 right-0 bg-black/50 px-1 py-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <p className="text-white text-[8px] truncate">{f.name}</p>
+                      </div>
+                    </a>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       )}
-      {rfq.totalPlannedMH > 0 && (
-        <div className="grid grid-cols-3 gap-3">
-          <div className="bg-slate-50 rounded-lg border border-slate-200 p-3 text-center">
-            <p className="font-bold text-[#0f2035]">{rfq.totalPlannedMH} MH</p>
-            <p className="text-[10px] text-slate-500">Planned MH</p>
+
+      {/* ── Section 4: Workflow Summary (only if data exists) ── */}
+      {(rfq.totalPlannedMH > 0 || rfq.totalCost > 0 || assignedEngineers.length > 0 || rfq.leadNote || rfq.approvalNote) && (
+        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+          <div className="bg-green-800 px-4 py-2">
+            <p className="text-[10px] font-bold text-white uppercase tracking-widest">Workflow Summary</p>
           </div>
-          <div className="bg-slate-50 rounded-lg border border-slate-200 p-3 text-center">
-            <p className="font-bold text-[#0f2035]">{rfq.wbsItems?.length || 0}</p>
-            <p className="text-[10px] text-slate-500">WBS Tasks</p>
-          </div>
-          <div className="bg-green-50 rounded-lg border border-green-200 p-3 text-center">
-            <p className="font-bold text-green-700">{formatIDR(rfq.totalCost)}</p>
-            <p className="text-[10px] text-slate-500">Cost Estimate</p>
+          <div className="p-4 space-y-4">
+            {/* MHE Stats */}
+            {(rfq.totalPlannedMH > 0 || rfq.totalCost > 0) && (
+              <div className="grid grid-cols-4 gap-3">
+                <div className="bg-slate-50 rounded-lg border border-slate-200 p-3 text-center">
+                  <p className="font-bold text-[#0f2035] text-lg">{rfq.totalPlannedMH || 0}</p>
+                  <p className="text-[10px] text-slate-500 mt-0.5">Planned MH</p>
+                </div>
+                <div className="bg-slate-50 rounded-lg border border-slate-200 p-3 text-center">
+                  <p className="font-bold text-[#0f2035] text-lg">{rfq.mheRows?.length || rfq.wbsItems?.length || 0}</p>
+                  <p className="text-[10px] text-slate-500 mt-0.5">Activities</p>
+                </div>
+                <div className="bg-blue-50 rounded-lg border border-blue-200 p-3 text-center">
+                  <p className="font-bold text-blue-700 text-lg">{rfq.dateStart || '—'}</p>
+                  <p className="text-[10px] text-slate-500 mt-0.5">Start Date</p>
+                </div>
+                {canSeeCost ? (
+                <div className="bg-green-50 rounded-lg border border-green-200 p-3 text-center">
+                  <p className="font-bold text-green-700">{formatIDR(rfq.totalCost)}</p>
+                  <p className="text-[10px] text-slate-500 mt-0.5">Cost Estimate</p>
+                </div>
+              ) : (
+                <div className="bg-slate-100 rounded-lg border border-slate-200 p-3 text-center">
+                  <p className="font-bold text-slate-400 text-sm">— Restricted —</p>
+                  <p className="text-[10px] text-slate-400 mt-0.5">Cost Estimate</p>
+                </div>
+              )}
+              </div>
+            )}
+            {/* Assigned Engineers */}
+            {assignedEngineers.length > 0 && (
+              <div>
+                <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-2">Assigned Engineers</p>
+                <div className="flex flex-wrap gap-2">
+                  {assignedEngineers.map(e => (
+                    <span key={e.id} className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2.5 py-1 rounded-full font-medium">{e.name}</span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {/* Lead Note */}
+            {rfq.leadNote && (
+              <div>
+                <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-1">Lead Review Note</p>
+                <p className="text-sm text-slate-700 bg-blue-50 rounded-lg p-3 border border-blue-200">{rfq.leadNote}</p>
+              </div>
+            )}
+            {/* Approval Note */}
+            {rfq.approvalNote && (
+              <div>
+                <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wide mb-1">Approval Note</p>
+                <p className="text-sm text-slate-700 bg-yellow-50 rounded-lg p-3 border border-yellow-200">{rfq.approvalNote}</p>
+              </div>
+            )}
           </div>
         </div>
       )}
-      {assignedEngineers.length > 0 && (
-        <div>
-          <p className="text-xs text-slate-400 font-medium mb-2">Assigned Engineers</p>
-          <div className="flex flex-wrap gap-2">
-            {assignedEngineers.map(e => (
-              <span key={e.id} className="text-xs bg-slate-100 text-slate-700 px-2.5 py-1 rounded-full font-medium">{e.name}</span>
-            ))}
-          </div>
-        </div>
-      )}
-      {rfq.approvalNote && (
-        <div>
-          <p className="text-xs text-slate-400 font-medium mb-1">Approval Note</p>
-          <p className="text-sm text-slate-700 bg-yellow-50 rounded-lg p-3 border border-yellow-200">{rfq.approvalNote}</p>
-        </div>
-      )}
+
       <div className="flex justify-end pt-2 border-t border-slate-100">
         <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg">Close</button>
       </div>
@@ -1401,11 +1639,12 @@ function RFQDetail({ rfq, onClose }) {
 // ─── Shared RFQ Table ─────────────────────────────────────────────────────────
 
 const ALL_STATUS_OPTIONS = [
-  'All', 'Pending Lead', 'Returned', 'Need Clarify', 'Pending MH',
+  'All', 'Draft', 'Pending Lead', 'Returned', 'Need Clarify', 'Pending MH',
   'Pending Manager', 'Pending Approval', 'Approved to Process', 'Approved', 'Rejected', 'Cancelled',
 ]
 
 const STATUS_CLS = {
+  'Draft':              'bg-slate-200 text-slate-600',
   'Pending Lead':       'bg-yellow-100 text-yellow-700',
   'Returned':           'bg-orange-100 text-orange-700',
   'Need Clarify':       'bg-pink-100 text-pink-700',
@@ -1426,12 +1665,17 @@ function StatusPill({ status }) {
   )
 }
 
-function RFQTable({ rows, onAction, onDetail, onEdit, onDelete, actionLabel, actionColor, emptyMsg, canEdit, showEditDelete, isMasterAdmin }) {
+function RFQTable({ rows, onAction, onDetail, onEdit, onDelete, actionLabel, actionColor, emptyMsg, canEdit, showEditDelete, isMasterAdmin, role }) {
+  const showCost = ['ppeManager', 'ppeAdmin', 'MasterAdmin', 'GM/MD'].includes(role)
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState('All')
 
   const filtered = useMemo(() => {
     let list = [...rows]
+    // Non-Requestor roles cannot see Draft RFQs
+    if (!['Requestor', 'ppeAdmin', 'MasterAdmin'].includes(role)) {
+      list = list.filter(r => r.status !== 'Draft')
+    }
     if (filterStatus !== 'All') list = list.filter(r => r.status === filterStatus)
     if (search.trim()) {
       const q = search.toLowerCase()
@@ -1472,7 +1716,7 @@ function RFQTable({ rows, onAction, onDetail, onEdit, onDelete, actionLabel, act
                 <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Service</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Urgency</th>
                 <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">Plan MH</th>
-                <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">Cost Est.</th>
+                {showCost && <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">Cost Est.</th>}
                 <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Status</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Date</th>
                 <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">Actions</th>
@@ -1482,8 +1726,24 @@ function RFQTable({ rows, onAction, onDetail, onEdit, onDelete, actionLabel, act
               {filtered.length === 0 ? (
                 <tr><td colSpan={9} className="px-4 py-10 text-center text-slate-400 text-sm">{emptyMsg || 'No records found.'}</td></tr>
               ) : filtered.map(rfq => (
-                <tr key={rfq.id} className={`hover:bg-slate-50 transition-colors ${rfq.status === 'Need Clarify' ? 'bg-pink-50' : rfq.status === 'Returned' ? 'bg-orange-50' : ''}`}>
-                  <td className="px-4 py-3 font-semibold text-[#0f2035] whitespace-nowrap">{rfq.requestWorkNo}</td>
+                <tr key={rfq.id}
+                  onClick={() => rfq.status === 'Draft'
+                    ? (onEdit && onEdit(rfq))
+                    : (onDetail && onDetail(rfq))
+                  }
+                  title={rfq.status === 'Draft' ? 'Click to continue editing this draft' : 'Click to view details'}
+                  className={`cursor-pointer transition-colors ${
+                    rfq.status === 'Draft'       ? 'bg-slate-50 hover:bg-slate-100 opacity-80' :
+                    rfq.status === 'Need Clarify' ? 'bg-pink-50 hover:bg-pink-100' :
+                    rfq.status === 'Returned'     ? 'bg-orange-50 hover:bg-orange-100' :
+                    'hover:bg-blue-50'
+                  }`}>
+                  <td className="px-4 py-3 font-semibold text-[#0f2035] whitespace-nowrap">
+                    <span className="flex items-center gap-1.5">
+                      {rfq.requestWorkNo}
+                      {rfq.status === 'Draft' && <span className="text-[9px] font-bold text-slate-400 bg-slate-200 px-1.5 py-0.5 rounded uppercase tracking-wide">Draft</span>}
+                    </span>
+                  </td>
                   <td className="px-4 py-3 text-slate-700 max-w-[130px] truncate">{rfq.requestor || rfq.client || '—'}</td>
                   <td className="px-4 py-3">
                     <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
@@ -1495,30 +1755,30 @@ function RFQTable({ rows, onAction, onDetail, onEdit, onDelete, actionLabel, act
                     <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${URGENCY_CLS[rfq.urgency] || 'bg-slate-100 text-slate-600'}`}>{rfq.urgency || '—'}</span>
                   </td>
                   <td className="px-4 py-3 text-right tabular-nums text-slate-700">{rfq.totalPlannedMH > 0 ? `${rfq.totalPlannedMH} MH` : '—'}</td>
-                  <td className="px-4 py-3 text-right tabular-nums text-slate-700">{rfq.totalCost > 0 ? formatIDR(rfq.totalCost) : '—'}</td>
+                  {showCost && <td className="px-4 py-3 text-right tabular-nums text-slate-700">{rfq.totalCost > 0 ? formatIDR(rfq.totalCost) : '—'}</td>}
                   <td className="px-4 py-3"><StatusPill status={rfq.status} /></td>
                   <td className="px-4 py-3 text-slate-500 text-xs whitespace-nowrap">{rfq.submittedAt}</td>
-                  <td className="px-4 py-3">
+                  <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                     <div className="flex items-center justify-end gap-1">
                       {canEdit && onAction && (
-                        <button onClick={() => onAction(rfq)}
+                        <button onClick={(e) => { e.stopPropagation(); onAction(rfq) }}
                           className={`px-2.5 py-1.5 text-xs font-semibold text-white rounded-lg transition-colors ${actionColor}`}>
                           {actionLabel}
                         </button>
                       )}
-                      <button onClick={() => onDetail(rfq)}
+                      <button onClick={(e) => { e.stopPropagation(); onDetail && onDetail(rfq) }}
                         className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors" title="View Details">
                         <Eye size={15} />
                       </button>
                       {showEditDelete && onEdit && (
-                        <button onClick={() => onEdit(rfq)}
+                        <button onClick={(e) => { e.stopPropagation(); onEdit(rfq) }}
                           className="p-1.5 rounded-lg text-slate-400 hover:text-amber-600 hover:bg-amber-50 transition-colors" title="Edit RFQ">
                           <Pencil size={15} />
                         </button>
                       )}
                       {showEditDelete && onDelete && (
                         canDelete(rfq) ? (
-                          <button onClick={() => onDelete(rfq)}
+                          <button onClick={(e) => { e.stopPropagation(); onDelete(rfq) }}
                             className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors" title="Delete RFQ">
                             <Trash2 size={15} />
                           </button>
@@ -1693,6 +1953,7 @@ export default function RFQ() {
                   </div>
                   <RFQTable
                     rows={needClarifyRfqs}
+                    role={currentRole}
                     onDetail={(rfq) => openModal('detail', rfq)}
                     onAction={(rfq) => openModal('revise', rfq)}
                     onEdit={(rfq) => openModal('edit', rfq)}
@@ -1715,6 +1976,7 @@ export default function RFQ() {
                   </div>
                   <RFQTable
                     rows={returnedRfqs}
+                    role={currentRole}
                     onDetail={(rfq) => openModal('detail', rfq)}
                     onAction={(rfq) => openModal('revise', rfq)}
                     onEdit={(rfq) => openModal('edit', rfq)}
@@ -1733,8 +1995,9 @@ export default function RFQ() {
                 <p className="text-xs font-semibold text-slate-500 mb-2">All Submissions</p>
                 <RFQTable
                   rows={rfqs}
+                  role={currentRole}
                   onDetail={(rfq) => openModal('detail', rfq)}
-                  onEdit={isMasterAdmin ? (rfq) => openModal('edit', rfq) : undefined}
+                  onEdit={(rfq) => openModal('edit', rfq)}
                   onDelete={isMasterAdmin ? handleDelete : undefined}
                   onAction={null}
                   emptyMsg="No RFQ submissions yet. Click 'New RFQ' to create one."
@@ -1771,6 +2034,7 @@ export default function RFQ() {
                 </div>
                 <RFQTable
                   rows={pendingLeadRfqs}
+                  role={currentRole}
                   onDetail={(rfq) => openModal('detail', rfq)}
                   onAction={canPlanMH ? (rfq) => openModal('leadReceive', rfq) : null}
                   onEdit={isMasterAdmin ? (rfq) => openModal('edit', rfq) : undefined}
@@ -1794,6 +2058,7 @@ export default function RFQ() {
                 </div>
                 <RFQTable
                   rows={pendingMHRfqs}
+                  role={currentRole}
                   onDetail={(rfq) => openModal('detail', rfq)}
                   onAction={canPlanMH ? (rfq) => openModal('stage2', rfq) : null}
                   onEdit={isMasterAdmin ? (rfq) => openModal('edit', rfq) : undefined}
@@ -1825,6 +2090,7 @@ export default function RFQ() {
               )}
               <RFQTable
                 rows={pendingManagerRfqs}
+                role={currentRole}
                 onDetail={(rfq) => openModal('detail', rfq)}
                 onAction={canCostEst ? (rfq) => openModal('stage3', rfq) : null}
                 onEdit={isMasterAdmin ? (rfq) => openModal('edit', rfq) : undefined}
@@ -1864,6 +2130,7 @@ export default function RFQ() {
                 </div>
                 <RFQTable
                   rows={pendingApprovalRfqs}
+                  role={currentRole}
                   onDetail={(rfq) => openModal('detail', rfq)}
                   onAction={canApprove ? (rfq) => openModal('stage4', rfq) : null}
                   onEdit={isMasterAdmin ? (rfq) => openModal('edit', rfq) : undefined}
@@ -1886,6 +2153,7 @@ export default function RFQ() {
                   </div>
                   <RFQTable
                     rows={approvedToProcessRfqs}
+                    role={currentRole}
                     onDetail={(rfq) => openModal('detail', rfq)}
                     onEdit={isMasterAdmin ? (rfq) => openModal('edit', rfq) : undefined}
                     onDelete={isMasterAdmin ? handleDelete : undefined}
@@ -1909,6 +2177,10 @@ export default function RFQ() {
       <Modal isOpen={activeModal?.type === 'new'} onClose={closeModal} title="New RFQ — Stage 1: Request" size="lg">
         <Stage1Form
           onClose={closeModal}
+          onSaveDraft={(form) => {
+            addRfq({ ...form, status: 'Draft', submittedBy: currentRole, savedAt: new Date().toISOString().split('T')[0] })
+            closeModal()
+          }}
           onSave={(form) => {
             addRfq({ ...form, status: 'Pending Lead', submittedBy: currentRole, submittedAt: new Date().toISOString().split('T')[0] })
             closeModal()
@@ -1933,8 +2205,12 @@ export default function RFQ() {
               <Stage1Form
                 initial={activeModal.rfq}
                 onClose={closeModal}
+                onSaveDraft={activeModal.rfq.status === 'Draft' ? (form) => {
+                  updateRfq(activeModal.rfq.id, { ...form, status: 'Draft', savedAt: new Date().toISOString().split('T')[0] })
+                  closeModal()
+                } : undefined}
                 onSave={(form) => {
-                  updateRfq(activeModal.rfq.id, { ...form })
+                  updateRfq(activeModal.rfq.id, { ...form, ...(activeModal.rfq.status === 'Draft' ? { status: 'Pending Lead', submittedAt: new Date().toISOString().split('T')[0] } : {}) })
                   closeModal()
                 }}
               />
@@ -1987,7 +2263,7 @@ export default function RFQ() {
 
       {/* Stage 2 — Manhour Plan */}
       <Modal isOpen={activeModal?.type === 'stage2'} onClose={closeModal}
-        title={`Manhour Plan — ${activeModal?.rfq?.requestWorkNo || ''}`} size="xl">
+        title={`Manhour Plan — ${activeModal?.rfq?.requestWorkNo || ''}`} size="2xl" draggable>
         {activeModal?.rfq && (
           <>
             <div className="px-6 pt-4"><Stepper status={activeModal.rfq.status} /></div>
@@ -2000,12 +2276,13 @@ export default function RFQ() {
 
       {/* Stage 3 — Cost Estimate */}
       <Modal isOpen={activeModal?.type === 'stage3'} onClose={closeModal}
-        title={`Cost Estimate — ${activeModal?.rfq?.requestWorkNo || ''}`} size="xl">
+        title={`Cost Estimate — ${activeModal?.rfq?.requestWorkNo || ''}`} size="2xl" draggable>
         {activeModal?.rfq && (
           <>
             <div className="px-6 pt-5"><Stepper status={activeModal.rfq.status} /></div>
             <Stage3Form rfq={activeModal.rfq} onClose={closeModal}
               onSave={(data) => { updateRfq(activeModal.rfq.id, data); closeModal() }}
+              onSaveDraft={(data) => updateRfq(activeModal.rfq.id, data)}
               onCancel={() => { updateRfq(activeModal.rfq.id, { status: 'Cancelled' }); closeModal() }} />
           </>
         )}
@@ -2026,7 +2303,7 @@ export default function RFQ() {
       {/* Detail View */}
       <Modal isOpen={activeModal?.type === 'detail'} onClose={closeModal}
         title={`RFQ Details — ${activeModal?.rfq?.requestWorkNo || ''}`} size="lg">
-        {activeModal?.rfq && <RFQDetail rfq={activeModal.rfq} onClose={closeModal} />}
+        {activeModal?.rfq && <RFQDetail rfq={activeModal.rfq} onClose={closeModal} role={currentRole} />}
       </Modal>
 
       {/* Delete Confirm */}
