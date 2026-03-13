@@ -1,0 +1,34 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // PPE System app: allow read/write for any signed-in user
+    // Use wildcard for top-level collection in case name has space encoding differences
+    match /{rootCol}/root {
+      allow read, write: if request.auth != null;
+    }
+    match /{rootCol}/root/unitRates/{id} {
+      allow read, write: if request.auth != null;
+    }
+    match /{rootCol}/root/teamRates/{id} {
+      allow read, write: if request.auth != null;
+    }
+    match /{rootCol}/root/rfqs/{id} {
+      allow read, write: if request.auth != null;
+    }
+    match /{rootCol}/root/workOrders/{id} {
+      allow read, write: if request.auth != null;
+    }
+    match /{rootCol}/root/dailyReports/{id} {
+      allow read, write: if request.auth != null;
+    }
+    match /{rootCol}/root/users/{uid} {
+      allow read, write: if request.auth != null;
+    }
+    match /{rootCol}/root/appMeta/{doc} {
+      allow read, write: if request.auth != null;
+    }
+    match /{rootCol}/root/activityLogs/{id} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}

@@ -2177,13 +2177,37 @@ export default function RFQ() {
       <Modal isOpen={activeModal?.type === 'new'} onClose={closeModal} title="New RFQ — Stage 1: Request" size="lg">
         <Stage1Form
           onClose={closeModal}
-          onSaveDraft={(form) => {
-            addRfq({ ...form, status: 'Draft', submittedBy: currentRole, savedAt: new Date().toISOString().split('T')[0] })
-            closeModal()
+          onSaveDraft={async (form) => {
+            try {
+              await addRfq({
+                ...form,
+                status: 'Draft',
+                submittedBy: currentRole,
+                savedAt: new Date().toISOString().split('T')[0],
+              })
+              closeModal()
+            } catch (err) {
+              console.error('Failed to save RFQ draft:', err)
+              const code = err?.code || err?.message || ''
+              const detail = code ? ` (${code})` : ''
+              window.alert(`ไม่สามารถบันทึก Draft RFQ ได้${detail}\n\nตรวจสอบ: 1) ล็อกอินแล้ว 2) Deploy Firestore rules: firebase deploy --only firestore`)
+            }
           }}
-          onSave={(form) => {
-            addRfq({ ...form, status: 'Pending Lead', submittedBy: currentRole, submittedAt: new Date().toISOString().split('T')[0] })
-            closeModal()
+          onSave={async (form) => {
+            try {
+              await addRfq({
+                ...form,
+                status: 'Pending Lead',
+                submittedBy: currentRole,
+                submittedAt: new Date().toISOString().split('T')[0],
+              })
+              closeModal()
+            } catch (err) {
+              console.error('Failed to submit RFQ:', err)
+              const code = err?.code || err?.message || ''
+              const detail = code ? ` (${code})` : ''
+              window.alert(`ไม่สามารถ Submit RFQ ได้${detail}\n\nตรวจสอบ: 1) ล็อกอินแล้ว 2) Deploy Firestore rules: firebase deploy --only firestore`)
+            }
           }}
         />
       </Modal>

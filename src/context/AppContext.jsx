@@ -4,13 +4,40 @@ import {
   setDoc, updateDoc, deleteDoc,
 } from 'firebase/firestore'
 import { db } from '../firebase/config'
-import { seedFirestore } from '../firebase/seed'
 
 // ─── Firestore path helpers ───────────────────────────────────────────────────
 const ROOT_COL = 'PPE System'
 const ROOT_DOC = 'root'
 const subCol = (name) => collection(db, ROOT_COL, ROOT_DOC, name)
 const subDocRef = (name, id) => doc(db, ROOT_COL, ROOT_DOC, name, id)
+
+// Firestore: no undefined, no invalid nested entities in arrays (e.g. undefined in objects)
+function firestoreSafe(obj) {
+  if (obj === undefined) return undefined
+  if (obj === null) return null
+  if (typeof obj === 'number' && (Number.isNaN(obj) || !Number.isFinite(obj))) return null
+  if (typeof obj === 'string' || typeof obj === 'boolean') return obj
+  if (typeof obj === 'number') return obj
+  if (obj instanceof Date) return obj.toISOString()
+  if (Array.isArray(obj)) {
+    const out = []
+    for (const item of obj) {
+      const v = firestoreSafe(item)
+      if (v !== undefined) out.push(v)
+    }
+    return out
+  }
+  if (typeof obj === 'object' && obj !== null && !Array.isArray(obj) && !(obj instanceof Date)) {
+    const out = {}
+    for (const [k, v] of Object.entries(obj)) {
+      if (v === undefined) continue
+      const safe = firestoreSafe(v)
+      if (safe !== undefined) out[k] = safe
+    }
+    return out
+  }
+  return undefined
+}
 
 // ─── ROLES ───────────────────────────────────────────────────────────────────
 
@@ -75,19 +102,6 @@ export function AppProvider({ children }) {
     return () => unsubs.forEach(u => u())
   }, [])
 
-  // ── Auto-seed: if Firestore collections come back empty, seed them ───────
-  useEffect(() => {
-    if (loading) return
-    if (
-      unitRates.length === 0 &&
-      teamRates.length === 0 &&
-      rfqs.length === 0
-    ) {
-      console.log('Collections empty — seeding initial data...')
-      seedFirestore().catch(console.error)
-    }
-  }, [loading]) // eslint-disable-line react-hooks/exhaustive-deps
-
   // ── Unit Rate CRUD ──────────────────────────────────────────────────────
   const addUnitRate = async (data) => {
     const id = `ur-${Date.now()}`
@@ -115,7 +129,7 @@ export function AppProvider({ children }) {
   // ── RFQ CRUD ────────────────────────────────────────────────────────────
   const addRfq = async (data) => {
     const id = `rfq-${Date.now()}`
-    await setDoc(subDocRef('rfqs', id), {
+    const raw = {
       id,
       wbsItems: [],
       costItems: [],
@@ -124,10 +138,14 @@ export function AppProvider({ children }) {
       totalCost: 0,
       approvalNote: '',
       ...data,
-    })
+    }
+    const payload = firestoreSafe(raw)
+    if (!payload) return
+    await setDoc(subDocRef('rfqs', id), payload)
   }
   const updateRfq = async (id, data) => {
-    await updateDoc(subDocRef('rfqs', id), data)
+    const payload = firestoreSafe(data)
+    if (payload) await updateDoc(subDocRef('rfqs', id), payload)
   }
   const deleteRfq = async (id) => {
     await deleteDoc(subDocRef('rfqs', id))
