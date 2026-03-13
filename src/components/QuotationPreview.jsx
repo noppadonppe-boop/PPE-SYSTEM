@@ -20,12 +20,35 @@ export default function QuotationPreview({ rfq, directRows, indirectRows, overhe
       <title>Quotation — ${rfq.requestWorkNo}</title>
       <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: 'Inter', sans-serif; background: #fff; color: #1e293b; }
-        .page { width: 210mm; min-height: 297mm; margin: 0 auto; padding: 16mm 16mm 12mm 16mm; }
+        * {
+          margin: 0;
+          padding: 0;
+          box-sizing: border-box;
+          -webkit-print-color-adjust: exact;
+          print-color-adjust: exact;
+        }
+        body {
+          font-family: 'Inter', sans-serif;
+          background: #fff;
+          color: #1e293b;
+        }
+        .page {
+          width: 210mm;
+          min-height: 297mm;
+          margin: 0 auto;
+          padding: 16mm 16mm 12mm 16mm;
+        }
+        @page {
+          size: A4;
+          margin: 0;
+        }
         @media print {
           body { margin: 0; }
-          .page { width: 210mm; padding: 14mm 14mm 10mm 14mm; box-shadow: none; }
+          .page {
+            width: 210mm;
+            padding: 14mm 14mm 10mm 14mm;
+            box-shadow: none;
+          }
         }
       </style>
     </head><body>${content}</body></html>`)

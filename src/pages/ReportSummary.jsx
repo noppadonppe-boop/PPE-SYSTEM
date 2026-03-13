@@ -27,9 +27,23 @@ function WOSummaryCard({ wo, reports, teamRates }) {
     [reports, wo.id]
   )
 
-  const latestDr       = woDrs[woDrs.length - 1]
-  const cumProgress    = latestDr?.cumulativeProgress ?? 0
-  const cumSpentMH     = latestDr?.cumulativeSpentMH  ?? 0
+  // Total spent MH across ALL team members for this WO
+  const cumSpentMH = woDrs
+    .filter(d => !d.isLeaveAbsent)
+    .reduce((s, d) => s + (d.spentMHToday || 0), 0)
+
+  // Overall progress = average of latest cumulativeProgress per reporter
+  const latestPerUser = new Map()
+  woDrs.forEach(d => {
+    if (!latestPerUser.has(d.submittedBy) || d.reportDate > latestPerUser.get(d.submittedBy).reportDate) {
+      latestPerUser.set(d.submittedBy, d)
+    }
+  })
+  const userLatest = Array.from(latestPerUser.values())
+  const cumProgress = userLatest.length > 0
+    ? Math.round(userLatest.reduce((s, d) => s + (d.cumulativeProgress || 0), 0) / userLatest.length)
+    : 0
+
   const balanceMH      = wo.totalPlannedMH - cumSpentMH
   const efficiency     = cumSpentMH > 0 ? ((cumProgress / 100) * wo.totalPlannedMH / cumSpentMH * 100).toFixed(1) : '—'
   const leaveCount     = woDrs.filter(d => d.isLeaveAbsent).length
@@ -239,8 +253,17 @@ export default function ReportSummary() {
     ? (() => {
         const vals = workOrders.map(wo => {
           const drs = dailyReports.filter(d => d.workOrderId === wo.id)
-            .sort((a, b) => b.reportDate.localeCompare(a.reportDate))
-          return drs[0]?.cumulativeProgress ?? 0
+          if (drs.length === 0) return 0
+
+          const latestPerUser = new Map()
+          drs.forEach(r => {
+            if (!latestPerUser.has(r.submittedBy) || r.reportDate > latestPerUser.get(r.submittedBy).reportDate) {
+              latestPerUser.set(r.submittedBy, r)
+            }
+          })
+          const userLatest = Array.from(latestPerUser.values())
+          if (userLatest.length === 0) return 0
+          return userLatest.reduce((s, r) => s + (r.cumulativeProgress || 0), 0) / userLatest.length
         })
         return (vals.reduce((s, v) => s + v, 0) / vals.length).toFixed(1)
       })()

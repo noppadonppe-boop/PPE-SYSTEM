@@ -4,7 +4,7 @@ import {
   Calculator, Users, DollarSign, ClipboardList, FileText,
   ChevronRight, InboxIcon, ClipboardCheck, BadgeCheck,
   Pencil, Link2, Upload, Image, MessageSquare, Download, FileUp, Save,
-  Loader2, ZoomIn,
+  Loader2, ZoomIn, Calendar,
 } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import { useApp } from '../context/AppContext'
@@ -431,23 +431,49 @@ function FileUploadField({ label, accept, icon, files = [], onChange, isImage })
 
 const SERVICE_TYPE_PREFIX = { CMG: 'RQ-CMG-J', PPE: 'RQ-PPE-EJ', Other: 'RQ-Gen-J' }
 
+// S4: เอกสารอ้างอิงจากเจ้าของงาน — dropdown options
+const S4_REF_DOC_OPTIONS = [
+  { value: 'scope_of_work',     label: 'รายละเอียดขอบเขตงาน (Scope of work)' },
+  { value: 'requirement',      label: 'ข้อกำหนดสำหรับการทำงาน (Requirement of work)' },
+  { value: 'drawing',          label: 'รายละเอียดแบบ (Drawing)' },
+  { value: 'calculation',      label: 'เอกสารรายการคำนวณเดิม (Calculation)' },
+  { value: 'soil_test',        label: 'เอกสารสำรวจที่ดิน (Soil test report)' },
+  { value: 'equipment_load',   label: 'เอกสารเครื่องจักร (Equipment load)' },
+  { value: 'other',           label: 'Other' },
+]
+// S6: รูปแบบงานที่จัดส่ง — multi-select options
+const S6_DELIVERY_FORMAT_OPTIONS = [
+  { value: '3d_model',         label: '3D MODEL (Staad / Tekla / Revit / Skp. / Other)' },
+  { value: 'drawing_shop',     label: 'DRAWING or SHOP DRAWING (Pdf. / CAD)' },
+  { value: 'calculation_report', label: 'CALCULATION REPORT' },
+  { value: 'boq_internal',      label: 'BOQ FOR INTERNAL' },
+  { value: 'boq_owner',        label: 'BOQ FOR OWNER' },
+  { value: 'other',            label: 'Other' },
+]
+
 const EMPTY_RFQ_FORM = {
-  dateRequest:    new Date().toISOString().split('T')[0],
-  serviceType:    'CMG',
-  requestWorkNo:  '',
-  requestor:      '',
-  emailRequestor: '',
-  tel:            '',
-  projectNo:      '',
-  client:         '',
-  urgency:        'Normal',
-  s1Location:     'ภายในพื้นที่ผู้ว่าจ้าง',
-  s2WorkType:     'โครงการใหม่',
-  s3WorkKind:     '',
-  details:        '',
-  linkUrl:        '',
-  attachments:    [],
-  photos:         [],
+  dateRequest:      new Date().toISOString().split('T')[0],
+  serviceType:      'CMG',
+  requestWorkNo:    '',
+  requestor:        '',
+  emailRequestor:   '',
+  tel:              '',
+  projectNo:        '',
+  client:           '',
+  urgency:          'Normal',
+  s1Location:       'ภายในพื้นที่ผู้ว่าจ้าง',
+  s2WorkType:       'โครงการใหม่',
+  s3WorkKind:       '',
+  // S4: multi-select reference docs (same style as S6)
+  s4RefDoc:         [],
+  s4RefDocOther:    '',
+  s5DeliveryTime:        '',
+  s6DeliveryFormat:     [],
+  s6DeliveryFormatOther: '',
+  details:              '',
+  linkUrl:          '',
+  attachments:      [],
+  photos:           [],
 }
 
 function Stage1Form({ onSave, onSaveDraft, onClose, initial, isRevise }) {
@@ -495,6 +521,19 @@ function Stage1Form({ onSave, onSaveDraft, onClose, initial, isRevise }) {
       e.emailRequestor = 'Invalid email'
     if (!form.client.trim())          e.client          = 'Required'
     if (!form.s3WorkKind.trim())      e.s3WorkKind      = 'Required'
+
+    const s4 = Array.isArray(form.s4RefDoc) ? form.s4RefDoc : []
+    if (s4.length === 0)              e.s4RefDoc        = 'Required'
+    if (s4.includes('other') && !(form.s4RefDocOther || '').trim()) {
+      e.s4RefDocOther = 'Please type another option'
+    }
+
+    if (!(form.s5DeliveryTime || '').trim()) e.s5DeliveryTime = 'Required'
+    const s6 = Array.isArray(form.s6DeliveryFormat) ? form.s6DeliveryFormat : []
+    if (s6.length === 0)               e.s6DeliveryFormat = 'Required'
+    if (s6.includes('other') && !(form.s6DeliveryFormatOther || '').trim()) {
+      e.s6DeliveryFormatOther = 'Please type another option'
+    }
     if (isRevise && !revisionNote.trim()) e.revisionNote = 'Please describe what you revised or added before resubmitting'
     setErrors(e)
     return Object.keys(e).length === 0
@@ -643,6 +682,104 @@ function Stage1Form({ onSave, onSaveDraft, onClose, initial, isRevise }) {
           placeholder="ระบุชนิดงาน / Describe work type…"
           className={inputCls('s3WorkKind')} />
         <Err k="s3WorkKind" />
+      </div>
+
+      {/* S4 : เอกสารอ้างอิงจากเจ้าของงาน — Multi-select (เหมือน S6) */}
+      <div>
+        <Label text="S4 : เอกสารอ้างอิงจากเจ้าของงาน" required />
+        <div className="space-y-2 border border-slate-200 rounded-lg p-3 bg-slate-50/50">
+          {(Array.isArray(form.s4RefDoc) ? form.s4RefDoc : []).length === 0 && errors.s4RefDoc && (
+            <p className="text-xs text-red-500">{errors.s4RefDoc}</p>
+          )}
+          {S4_REF_DOC_OPTIONS.map(o => {
+            const arr = Array.isArray(form.s4RefDoc) ? form.s4RefDoc : []
+            const checked = arr.includes(o.value)
+            return (
+              <label key={o.value} className="flex items-center gap-2 cursor-pointer text-sm text-slate-700 hover:text-slate-900">
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => {
+                    const next = checked ? arr.filter(v => v !== o.value) : [...arr, o.value]
+                    setForm(p => ({ ...p, s4RefDoc: next }))
+                    if (next.length > 0) setErrors(prev => ({ ...prev, s4RefDoc: '' }))
+                  }}
+                  className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                />
+                <span>{o.label}</span>
+              </label>
+            )
+          })}
+        </div>
+        {Array.isArray(form.s4RefDoc) && form.s4RefDoc.includes('other') && (
+          <div className="mt-2">
+            <input
+              value={form.s4RefDocOther || ''}
+              onChange={e => set('s4RefDocOther', e.target.value)}
+              placeholder="Please type another option here"
+              className={inputCls('s4RefDocOther')}
+            />
+            <Err k="s4RefDocOther" />
+          </div>
+        )}
+      </div>
+
+      {/* S5 : ระยะเวลาจัดส่ง + S6 : รูปแบบงานที่จัดส่ง */}
+      <div className="grid grid-cols-1 gap-4">
+        <div>
+          <Label text="S5 : ระยะเวลาจัดส่ง" required />
+          <div className="relative">
+            <input
+              type="date"
+              value={form.s5DeliveryTime || ''}
+              onChange={e => set('s5DeliveryTime', e.target.value)}
+              className={inputCls('s5DeliveryTime')}
+              placeholder="MM-DD-YYYY"
+            />
+            <Calendar size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+          </div>
+          <p className="text-[10px] text-slate-400 mt-1">รูปแบบ MM-DD-YYYY</p>
+          <Err k="s5DeliveryTime" />
+        </div>
+        <div>
+          <Label text="S6 : รูปแบบงานที่จัดส่ง" required />
+          <div className="space-y-2 border border-slate-200 rounded-lg p-3 bg-slate-50/50">
+            {(Array.isArray(form.s6DeliveryFormat) ? form.s6DeliveryFormat : []).length === 0 && errors.s6DeliveryFormat && (
+              <p className="text-xs text-red-500">{errors.s6DeliveryFormat}</p>
+            )}
+            {S6_DELIVERY_FORMAT_OPTIONS.map(o => {
+              const arr = Array.isArray(form.s6DeliveryFormat) ? form.s6DeliveryFormat : []
+              const checked = arr.includes(o.value)
+              return (
+                <label key={o.value} className="flex items-center gap-2 cursor-pointer text-sm text-slate-700 hover:text-slate-900">
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => {
+                      const next = checked ? arr.filter(v => v !== o.value) : [...arr, o.value]
+                      setForm(p => ({ ...p, s6DeliveryFormat: next }))
+                      if (next.length > 0) setErrors(prev => ({ ...prev, s6DeliveryFormat: '' }))
+                    }}
+                    className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                  />
+                  <span>{o.label}</span>
+                </label>
+              )
+            })}
+          </div>
+          {Array.isArray(form.s6DeliveryFormat) && form.s6DeliveryFormat.includes('other') && (
+            <div className="mt-2">
+              <input
+                value={form.s6DeliveryFormatOther || ''}
+                onChange={e => set('s6DeliveryFormatOther', e.target.value)}
+                placeholder="Please type another option here"
+                className={inputCls('s6DeliveryFormatOther')}
+              />
+              <Err k="s6DeliveryFormatOther" />
+            </div>
+          )}
+          <Err k="s6DeliveryFormat" />
+        </div>
       </div>
 
       {/* Row 8: Details / Scope */}
@@ -1305,7 +1442,7 @@ function Stage3Form({ rfq, onSave, onSaveDraft, onClose, onCancel }) {
           <div className="space-y-2 max-h-32 overflow-y-auto">
             {commentHistory.map((c, i) => (
               <div key={i} className={`rounded-lg px-3 py-2 text-xs border ${c.role === 'ppeManager' ? 'bg-blue-50 border-blue-200' : 'bg-amber-50 border-amber-200'}`}>
-                <p className="font-semibold text-slate-600">{c.role} — {c.date}</p>
+                <p className="font-semibold text-slate-600">{c.date}</p>
                 <p className="text-slate-700 mt-0.5">{c.note}</p>
               </div>
             ))}
@@ -1651,7 +1788,7 @@ function Stage4Form({ rfq, onSave, onClose }) {
           <div className="space-y-2 max-h-36 overflow-y-auto">
             {commentHistory.map((c, i) => (
               <div key={i} className={`rounded-lg px-3 py-2 text-xs border ${c.role === 'ppeManager' ? 'bg-blue-50 border-blue-200' : 'bg-amber-50 border-amber-200'}`}>
-                <p className="font-semibold text-slate-600">{c.role} — {c.date}</p>
+                <p className="font-semibold text-slate-600">{c.date}</p>
                 <p className="text-slate-700 mt-0.5">{c.note}</p>
               </div>
             ))}
@@ -1961,7 +2098,7 @@ function StatusPill({ status }) {
   )
 }
 
-function RFQTable({ rows, onAction, onDetail, onEdit, onDelete, actionLabel, actionColor, emptyMsg, canEdit, showEditDelete, isMasterAdmin, role }) {
+function RFQTable({ rows, onAction, onDetail, onEdit, onDelete, actionLabel, actionColor, emptyMsg, canEdit, showEditDelete, isMasterAdmin, role, canEditRow, canDeleteRow }) {
   const showCost = ['ppeManager', 'ppeAdmin', 'MasterAdmin', 'GM/MD'].includes(role)
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState('All')
@@ -1987,6 +2124,8 @@ function RFQTable({ rows, onAction, onDetail, onEdit, onDelete, actionLabel, act
   }, [rows, search, filterStatus])
 
   const canDelete = (rfq) => isMasterAdmin || !['Approved', 'Approved to Process'].includes(rfq.status)
+  const rowCanEdit = (rfq) => (canEditRow ? canEditRow(rfq) : true)
+  const rowCanDelete = (rfq) => (canDeleteRow ? canDeleteRow(rfq) : canDelete(rfq))
 
   return (
     <div className="space-y-3">
@@ -2058,23 +2197,34 @@ function RFQTable({ rows, onAction, onDetail, onEdit, onDelete, actionLabel, act
                   <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
                     <div className="flex items-center justify-end gap-1">
                       {canEdit && onAction && (
-                        <button onClick={(e) => { e.stopPropagation(); onAction(rfq) }}
-                          className={`px-2.5 py-1.5 text-xs font-semibold text-white rounded-lg transition-colors ${actionColor}`}>
-                          {actionLabel}
-                        </button>
+                        rfq.status === 'Cancelled' ? (
+                          <button
+                            disabled
+                            className="px-2.5 py-1.5 text-xs font-semibold rounded-lg bg-slate-200 text-slate-500 cursor-not-allowed"
+                          >
+                            {actionLabel}
+                          </button>
+                        ) : (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); onAction(rfq) }}
+                            className={`px-2.5 py-1.5 text-xs font-semibold text-white rounded-lg transition-colors ${actionColor}`}
+                          >
+                            {actionLabel}
+                          </button>
+                        )
                       )}
                       <button onClick={(e) => { e.stopPropagation(); onDetail && onDetail(rfq) }}
                         className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors" title="View Details">
                         <Eye size={15} />
                       </button>
-                      {showEditDelete && onEdit && (
+                      {showEditDelete && onEdit && rowCanEdit(rfq) && (
                         <button onClick={(e) => { e.stopPropagation(); onEdit(rfq) }}
                           className="p-1.5 rounded-lg text-slate-400 hover:text-amber-600 hover:bg-amber-50 transition-colors" title="Edit RFQ">
                           <Pencil size={15} />
                         </button>
                       )}
                       {showEditDelete && onDelete && (
-                        canDelete(rfq) ? (
+                        rowCanDelete(rfq) ? (
                           <button onClick={(e) => { e.stopPropagation(); onDelete(rfq) }}
                             className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors" title="Delete RFQ">
                             <Trash2 size={15} />
@@ -2160,6 +2310,7 @@ export default function RFQ() {
   const pendingManagerRfqs    = visibleRfqs.filter(r => r.status === 'Pending Manager')
   const pendingApprovalRfqs   = visibleRfqs.filter(r => r.status === 'Pending Approval')
   const approvedToProcessRfqs = visibleRfqs.filter(r => r.status === 'Approved to Process')
+  const cancelledRfqs         = visibleRfqs.filter(r => r.status === 'Cancelled')
 
   // Cost tab hidden only if user is EXCLUSIVELY ppeLead (has no higher role)
   const canSeeCostTab = isMasterAdmin || !isPpeleadOnly
@@ -2314,12 +2465,14 @@ export default function RFQ() {
                   role={currentRole}
                   onDetail={(rfq) => openModal('detail', rfq)}
                   onEdit={(rfq) => openModal('edit', rfq)}
-                  onDelete={isMasterAdmin ? handleDelete : undefined}
+                  onDelete={(isMasterAdmin || isRequestorOnly) ? handleDelete : undefined}
                   onAction={null}
                   emptyMsg="No RFQ submissions yet. Click 'New RFQ' to create one."
                   canEdit={false}
-                  showEditDelete={isMasterAdmin}
+                  showEditDelete={isMasterAdmin || isRequestorOnly}
                   isMasterAdmin={isMasterAdmin}
+                  canEditRow={isRequestorOnly ? (rfq) => rfq.status === 'Draft' : undefined}
+                  canDeleteRow={isRequestorOnly ? (rfq) => rfq.status === 'Draft' : undefined}
                 />
               </div>
             </div>
@@ -2405,7 +2558,7 @@ export default function RFQ() {
                 </div>
               )}
               <RFQTable
-                rows={pendingManagerRfqs}
+                rows={[...pendingManagerRfqs, ...cancelledRfqs]}
                 role={currentRole}
                 onDetail={(rfq) => openModal('detail', rfq)}
                 onAction={canCostEst ? (rfq) => openModal('stage3', rfq) : null}

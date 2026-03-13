@@ -256,16 +256,16 @@ export default function Topbar({ pageTitle }) {
           <div className="relative" ref={notifRef}>
             <button
               onClick={() => setNotifOpen(v => !v)}
-              className={`relative p-2 rounded-lg transition-colors ${
+              className={`relative p-2.5 rounded-xl transition-colors ${
                 notifOpen
                   ? 'text-slate-800 bg-slate-100'
                   : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'
               }`}
             >
-              <Bell size={20} />
+              <Bell size={26} strokeWidth={1.8} />
               {notifications.length > 0 && (
-                <span className={`absolute top-0.5 right-0.5 min-w-[18px] h-[18px] px-1 flex items-center justify-center rounded-full text-white text-[10px] font-bold ${
-                  highCount > 0 ? 'bg-red-500' : 'bg-slate-400'
+                <span className={`absolute top-1 right-1 min-w-[20px] h-[20px] px-1 flex items-center justify-center rounded-full text-white text-[10px] font-bold shadow-sm animate-pulse ${
+                  highCount > 0 ? 'bg-red-500' : 'bg-orange-400'
                 }`}>
                   {notifications.length > 9 ? '9+' : notifications.length}
                 </span>

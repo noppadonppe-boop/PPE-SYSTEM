@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react'
+import React, { useMemo, useEffect, useState } from 'react'
 import {
   BarChart, Bar, PieChart, Pie, Cell, AreaChart, Area,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -8,7 +8,10 @@ import {
   TrendingUp, FileText, Users, Layers,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
+import { collection, onSnapshot } from 'firebase/firestore'
+import { db as authDb } from '../firebase/firebaseAuth'
 import StatusBadge from '../components/ui/StatusBadge'
+import UserAvatar from '../components/ui/UserAvatar'
 
 // ─── Color tokens ────────────────────────────────────────────────────────────
 const NAVY   = '#0f2035'
@@ -47,6 +50,29 @@ function DonutLabel({ cx, cy, total }) {
 // ─── Executive Dashboard ──────────────────────────────────────────────────────
 export default function Dashboard() {
   const { rfqs, workOrders, dailyReports, teamRates, currentRole, userRoles } = useApp()
+
+  // ── Load approved ppeTeam users from auth database ───────────────────────────
+  const [ppeTeamUsers, setPpeTeamUsers] = useState([])
+
+  useEffect(() => {
+    const ref = collection(authDb, 'PPE System', 'root', 'users')
+    const unsub = onSnapshot(ref, snap => {
+      const users = snap.docs.map(d => d.data())
+      setPpeTeamUsers(
+        users
+          .filter(u => u.status === 'approved')
+          .filter(u => Array.isArray(u.role) && u.role.includes('ppeTeam'))
+          .map(u => ({
+            id: u.uid,
+            name: `${u.firstName} ${u.lastName}`.trim(),
+            position: u.position || '',
+            photoURL: u.photoURL || '',
+            assignedProjects: Array.isArray(u.assignedProjects) ? u.assignedProjects : [],
+          }))
+      )
+    })
+    return unsub
+  }, [])
 
   // ── KPI derivations ────────────────────────────────────────────────────────
   const activeProjects   = workOrders.filter(w => w.status === 'Ongoing').length
@@ -115,13 +141,20 @@ export default function Dashboard() {
 
   // ── Team workload: count active assignments ───────────────────────────────
   const teamWorkload = useMemo(() => {
-    return teamRates.map(t => {
+    return ppeTeamUsers.map(u => {
       const activeCount = workOrders.filter(wo =>
-        wo.status === 'Ongoing' && (wo.assignedTeam || []).includes(t.id)
+        wo.status === 'Ongoing' && Array.isArray(wo.assignedTeam) && wo.assignedTeam.includes(u.id)
       ).length
-      return { name: t.name.split(' ')[0], projects: activeCount, position: t.position }
+      return {
+        id: u.id,
+        name: u.name,
+        shortName: u.name.split(' ')[0],
+        projects: activeCount,
+        position: u.position,
+        photoURL: u.photoURL,
+      }
     }).filter(t => t.projects > 0)
-  }, [teamRates, workOrders])
+  }, [ppeTeamUsers, workOrders])
 
   const formatIDR = (v) =>
     new Intl.NumberFormat('th-TH', { style: 'currency', currency: 'THB', notation: 'compact', maximumFractionDigits: 1 }).format(v)
@@ -320,12 +353,15 @@ export default function Dashboard() {
           {teamWorkload.length > 0 ? (
             <div className="space-y-3">
               {teamWorkload.map(t => (
-                <div key={t.name} className="flex items-center gap-3">
-                  <div className="w-7 h-7 rounded-full bg-[#0f2035] text-white flex items-center justify-center text-[10px] font-bold flex-shrink-0">
-                    {t.name.slice(0, 2).toUpperCase()}
-                  </div>
+                <div key={t.id} className="flex items-center gap-3">
+                  <UserAvatar
+                    photoURL={t.photoURL}
+                    name={t.name}
+                    size={28}
+                    textSize="text-[10px]"
+                  />
                   <div className="flex-1 min-w-0">
-                    <p className="text-xs font-semibold text-slate-700 truncate">{t.name}</p>
+                    <p className="text-xs font-semibold text-slate-700 truncate">{t.shortName}</p>
                     <p className="text-[10px] text-slate-400">{t.position}</p>
                   </div>
                   <span className="flex-shrink-0 text-xs font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full">
@@ -342,7 +378,7 @@ export default function Dashboard() {
           <div className="mt-4 pt-4 border-t border-slate-100">
             <div className="flex justify-between text-xs">
               <span className="text-slate-500">Total engineers</span>
-              <span className="font-semibold text-slate-700">{teamRates.length}</span>
+              <span className="font-semibold text-slate-700">{ppeTeamUsers.length}</span>
             </div>
             <div className="flex justify-between text-xs mt-1">
               <span className="text-slate-500">Currently active</span>

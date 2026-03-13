@@ -231,6 +231,9 @@ export function AppProvider({ children }) {
       if (payload) await updateDoc(subDocRef('dailyReports', id), payload)
     })
   }
+  const deleteDailyReport = async (id) => {
+    await deleteDoc(subDocRef('dailyReports', id))
+  }
 
   // ── Derived helpers ─────────────────────────────────────────────────────
   const getTeamMemberById = (id) => teamRates.find(t => t.id === id)
@@ -353,7 +356,7 @@ export function AppProvider({ children }) {
     teamRates, addTeamRate, updateTeamRate, deleteTeamRate,
     rfqs, addRfq, updateRfq, deleteRfq,
     workOrders, addWorkOrder, updateWorkOrder, deleteWorkOrder,
-    dailyReports, addDailyReport, updateDailyReport,
+    dailyReports, addDailyReport, updateDailyReport, deleteDailyReport,
     getTeamMemberById,
     getNotifications,
     loading,

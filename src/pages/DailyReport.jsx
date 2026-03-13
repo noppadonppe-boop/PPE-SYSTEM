@@ -2,7 +2,8 @@ import React, { useState, useMemo, useEffect } from 'react'
 import {
   Plus, Eye, Search, CalendarDays, AlertTriangle,
   Coffee, CheckCircle, Pencil, ThumbsUp, RotateCcw,
-  MessageSquare, ClipboardList, ListChecks,
+  MessageSquare, ClipboardList, ListChecks, ChevronLeft, ChevronRight, Trash2,
+  ClipboardCheck, UserCheck, XCircle,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
 import { useAuth } from '../context/AuthContext'
@@ -10,6 +11,7 @@ import { collection, onSnapshot } from 'firebase/firestore'
 import { db as authDb } from '../firebase/firebaseAuth'
 import Modal from '../components/ui/Modal'
 import StatusBadge from '../components/ui/StatusBadge'
+import ConfirmDialog from '../components/ui/ConfirmDialog'
 
 const DR_STATUS_CFG = {
   'Submitted':        { cls: 'bg-blue-100 text-blue-700',    label: 'Submitted' },
@@ -27,29 +29,26 @@ function DRStatusBadge({ status }) {
 // ── Submit / Edit Daily Report Form ──────────────────────────────────────────
 
 // ppeTeamUsers: [{ id: uid, name: 'First Last', position: '...' }]
-function DailyReportForm({ workOrder, teamRates, ppeTeamUsers, existingReports, editTarget, onSave, onClose }) {
+function DailyReportForm({ workOrder, teamRates, ppeTeamUsers, existingReports, editTarget, currentUserUid, onSave, onClose }) {
   const today     = new Date().toISOString().split('T')[0]
   const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0]
 
-  // Build activity rows from WO mheRows, filtered to the reporter's assigned items
   const allMheRows = workOrder.mheRows || workOrder.wbsItems || []
 
-  // reporters available for this WO: ppeTeamUsers whose UID is in assignedTeam
-  const assignedTeam    = workOrder.assignedTeam || []
-  const reporterOptions = ppeTeamUsers.filter(u => assignedTeam.includes(u.id))
+  // Reporter is always the current logged-in user (auto, not selectable)
+  const reporterUid = editTarget?.submittedBy ?? currentUserUid ?? ''
+  const reporterEntry = ppeTeamUsers.find(u => u.id === reporterUid)
+  const reporterName  = reporterEntry?.name ?? ''
 
-  // Auto-select reporter if editing, or if only one option available
-  const defaultReporter = editTarget?.submittedBy ?? (reporterOptions.length === 1 ? reporterOptions[0].id : '')
-
-  // Get prior reports for a specific reporter (scoped to same WO + same submittedBy)
-  const getPriorReports = (reporterUid) =>
+  // Get prior reports scoped to same WO + same submittedBy
+  const getPriorReports = (uid) =>
     existingReports
-      .filter(d => d.submittedBy === reporterUid && (editTarget ? d.id !== editTarget.id : true))
+      .filter(d => d.submittedBy === uid && (editTarget ? d.id !== editTarget.id : true))
       .sort((a, b) => a.reportDate.localeCompare(b.reportDate))
 
-  // Get latest prevProgress per activity row from prior reports of this reporter
-  const getActivityPrevProgress = (reporterUid, activityName) => {
-    const prior = getPriorReports(reporterUid)
+  // Get latest prevProgress per activity from prior reports
+  const getActivityPrevProgress = (uid, activityName) => {
+    const prior = getPriorReports(uid)
     for (let i = prior.length - 1; i >= 0; i--) {
       const rows = prior[i].activityRows || []
       const match = rows.find(r => r.activityName === activityName)
@@ -63,73 +62,83 @@ function DailyReportForm({ workOrder, teamRates, ppeTeamUsers, existingReports, 
     return 0
   }
 
-  const initActivityRows = (reporterUid, existingRows) => {
+  const initActivityRows = (uid, existingRows) => {
     if (existingRows && existingRows.length > 0) return existingRows
 
     // Resolve reporter name for matching assignEngineer
-    const userEntry    = ppeTeamUsers.find(u => u.id === reporterUid)
-    const legacyEntry  = teamRates.find(t => t.id === reporterUid)
-    const reporterName = userEntry?.name || legacyEntry?.name || ''
+    const userEntry   = ppeTeamUsers.find(u => u.id === uid)
+    const legacyEntry = teamRates.find(t => t.id === uid)
+    const rName       = userEntry?.name || legacyEntry?.name || ''
 
-    const myRows = reporterUid
+    // Filter only rows assigned to this user (or unassigned rows)
+    const myRows = uid
       ? allMheRows.filter(r =>
           !r.assignEngineer ||
-          r.assignEngineer === reporterName ||
-          r.assignEngineer === reporterUid
+          r.assignEngineer === rName ||
+          r.assignEngineer === uid
         )
       : allMheRows
 
     return myRows.map(r => ({
-      id:            r.id || r.activityName || Math.random().toString(36).slice(2),
-      activityName:  r.activityName || r.task || '',
-      totalMH:       r.totalMH || 0,
-      assignEngineer:r.assignEngineer || '',
-      prevProgress:  reporterUid ? getActivityPrevProgress(reporterUid, r.activityName || r.task || '') : 0,
-      todayProgress: '',
-      spentMHToday:  '',
-      note:          '',
+      id:             r.id || r.activityName || Math.random().toString(36).slice(2),
+      activityName:   r.activityName || r.task || '',
+      totalMH:        r.totalMH || 0,
+      assignEngineer: r.assignEngineer || '',
+      prevProgress:   uid ? getActivityPrevProgress(uid, r.activityName || r.task || '') : 0,
+      todayProgress:  '',
+      spentMHToday:   '',
+      note:           '',
     }))
   }
 
   const [form, setForm] = useState({
     reportDate:    editTarget?.reportDate    ?? today,
-    submittedBy:   defaultReporter,
     isLeaveAbsent: editTarget?.isLeaveAbsent ?? false,
     notes:         editTarget?.notes         ?? '',
   })
   const [actRows, setActRows] = useState(() =>
-    initActivityRows(defaultReporter, editTarget?.activityRows ?? null)
+    initActivityRows(reporterUid, editTarget?.activityRows ?? null)
   )
   const [errors, setErrors] = useState({})
 
-  // Re-init rows when reporter changes
-  const handleReporterChange = (id) => {
-    setForm(p => ({ ...p, submittedBy: id }))
-    setActRows(initActivityRows(id, null))
-  }
+  // Prior reports of THIS reporter only (for personal cumulative tracking)
+  const priorReports       = getPriorReports(reporterUid)
+  const priorCumulSpentMH  = priorReports.reduce((s, d) => s + (d.isLeaveAbsent ? 0 : d.spentMHToday), 0)
+  const priorCumulProgress = priorReports.length > 0 ? priorReports[priorReports.length - 1].cumulativeProgress : 0
 
-  // Prior cumulative totals scoped to THIS reporter only
-  const priorReports      = getPriorReports(form.submittedBy)
-  const priorCumulSpentMH = priorReports.reduce((s, d) => s + (d.isLeaveAbsent ? 0 : d.spentMHToday), 0)
-  const priorCumulProgress= priorReports.length > 0 ? priorReports[priorReports.length - 1].cumulativeProgress : 0
+  // Aggregate totals from THIS reporter's activity rows
+  const totalSpentToday    = form.isLeaveAbsent ? 0 : actRows.reduce((s, r) => s + (parseFloat(r.spentMHToday) || 0), 0)
+  const totalProgressToday = form.isLeaveAbsent ? 0 : actRows.reduce((s, r) => s + (parseFloat(r.todayProgress) || 0), 0)
+  const newCumulSpentMH    = priorCumulSpentMH + totalSpentToday
+  const newCumulProgress   = Math.min(priorCumulProgress + totalProgressToday, 100)
 
-  // Aggregate totals from activity rows
-  const totalSpentToday   = form.isLeaveAbsent ? 0 : actRows.reduce((s, r) => s + (parseFloat(r.spentMHToday) || 0), 0)
-  const totalProgressToday= form.isLeaveAbsent ? 0 : actRows.reduce((s, r) => s + (parseFloat(r.todayProgress) || 0), 0)
-  const newCumulSpentMH   = priorCumulSpentMH + totalSpentToday
-  const newCumulProgress  = Math.min(priorCumulProgress + totalProgressToday, 100)
-  const balanceMH         = workOrder.totalPlannedMH - newCumulSpentMH
+  // Balance MH = WO total − ALL users' spent MH for this WO (whole team, not just this reporter)
+  const allPriorSpentMH = existingReports
+    .filter(d => editTarget ? d.id !== editTarget.id : true)
+    .filter(d => !d.isLeaveAbsent)
+    .reduce((s, d) => s + (d.spentMHToday || 0), 0)
+  const balanceMH = workOrder.totalPlannedMH - (allPriorSpentMH + totalSpentToday)
 
   const updateRow = (idx, field, val) =>
     setActRows(rows => rows.map((r, i) => i === idx ? { ...r, [field]: val } : r))
 
-  // Allowed dates: today or yesterday (late submit)
   const allowedDates = [today, yesterday]
 
   const validate = () => {
     const e = {}
     if (!form.reportDate) e.reportDate = 'Date required'
-    if (!form.submittedBy) e.submittedBy = 'Reporter required'
+    if (!reporterUid) e.reporter = 'Cannot resolve current user'
+
+    // Prevent duplicate daily report for the same date by the same user on this WO
+    const hasSameDayReport = existingReports.some(d =>
+      d.submittedBy === reporterUid &&
+      d.reportDate === form.reportDate &&
+      (!editTarget || d.id !== editTarget.id)
+    )
+    if (hasSameDayReport) {
+      e.reportDate = 'Daily report for this date has already been submitted.'
+    }
+
     setErrors(e)
     return Object.keys(e).length === 0
   }
@@ -140,7 +149,7 @@ function DailyReportForm({ workOrder, teamRates, ppeTeamUsers, existingReports, 
       workOrderId:        workOrder.id,
       requestWorkNo:      workOrder.requestWorkNo,
       reportDate:         form.reportDate,
-      submittedBy:        form.submittedBy,
+      submittedBy:        reporterUid,
       progressToday:      totalProgressToday,
       cumulativeProgress: newCumulProgress,
       spentMHToday:       totalSpentToday,
@@ -153,9 +162,6 @@ function DailyReportForm({ workOrder, teamRates, ppeTeamUsers, existingReports, 
       reviewNote:         '',
     })
   }
-
-  const inCls = (err) =>
-    `px-2 py-1 text-xs border rounded outline-none w-full ${err ? 'border-red-400 bg-red-50' : 'border-slate-300 focus:border-blue-400'}`
 
   return (
     <div className="px-5 py-4 space-y-4 max-h-[85vh] overflow-y-auto">
@@ -172,7 +178,7 @@ function DailyReportForm({ workOrder, teamRates, ppeTeamUsers, existingReports, 
         </div>
       </div>
 
-      {/* Date & Reporter */}
+      {/* Date & Reporter (auto) */}
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label className="block text-xs font-semibold text-slate-600 mb-1">Report Date <span className="text-slate-400 font-normal">(today or yesterday)</span></label>
@@ -184,25 +190,26 @@ function DailyReportForm({ workOrder, teamRates, ppeTeamUsers, existingReports, 
         </div>
         <div>
           <label className="block text-xs font-semibold text-slate-600 mb-1">Reported By</label>
-          <select value={form.submittedBy} onChange={e => handleReporterChange(e.target.value)}
-            className={`w-full px-3 py-2 text-sm border rounded-lg outline-none focus:border-blue-500 bg-white ${errors.submittedBy ? 'border-red-400' : 'border-slate-300'}`}>
-            <option value="">— Select —</option>
-            {reporterOptions.map(u => (
-              <option key={u.id} value={u.id}>{u.name}{u.position ? ` (${u.position})` : ''}</option>
-            ))}
-          </select>
-          {errors.submittedBy && <p className="text-xs text-red-500 mt-1">{errors.submittedBy}</p>}
+          <div className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-slate-50 text-slate-700 font-medium flex items-center gap-2">
+            <div className="w-5 h-5 rounded-full bg-[#0f2035] text-white flex items-center justify-center text-[9px] font-bold flex-shrink-0">
+              {reporterName.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() || '?'}
+            </div>
+            <span className="truncate">{reporterName || reporterUid || '—'}</span>
+          </div>
+          {errors.reporter && <p className="text-xs text-red-500 mt-1">{errors.reporter}</p>}
         </div>
       </div>
 
-      {/* Leave Toggle */}
+      {/* Leave Toggle — per user */}
       <button type="button"
         onClick={() => setForm(p => ({ ...p, isLeaveAbsent: !p.isLeaveAbsent }))}
         className={`flex items-center gap-3 w-full px-4 py-2.5 rounded-xl border-2 transition-all ${form.isLeaveAbsent ? 'border-orange-400 bg-orange-50 text-orange-700' : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300'}`}>
         <Coffee size={16} className={form.isLeaveAbsent ? 'text-orange-500' : 'text-slate-400'} />
         <div className="text-left flex-1">
           <p className="text-sm font-semibold">Leave / Absent</p>
-          <p className="text-xs opacity-70">Toggle ON if on leave or absent today</p>
+          <p className="text-xs opacity-70">
+            {reporterName ? `Toggle ON if ${reporterName} is on leave or absent today` : 'Toggle ON if on leave or absent today'}
+          </p>
         </div>
         <div className={`w-9 h-5 rounded-full transition-colors flex-shrink-0 ${form.isLeaveAbsent ? 'bg-orange-400' : 'bg-slate-300'}`}>
           <div className={`w-5 h-5 bg-white rounded-full shadow transition-transform ${form.isLeaveAbsent ? 'translate-x-4' : 'translate-x-0'}`} />
@@ -229,7 +236,7 @@ function DailyReportForm({ workOrder, teamRates, ppeTeamUsers, existingReports, 
               </div>
               <div className={`text-center rounded-lg p-1 ${balanceMH < 0 ? 'bg-red-100' : balanceMH < workOrder.totalPlannedMH * 0.1 ? 'bg-yellow-100' : 'bg-green-100'}`}>
                 <p className={`text-base font-bold ${balanceMH < 0 ? 'text-red-700' : balanceMH < workOrder.totalPlannedMH * 0.1 ? 'text-yellow-700' : 'text-green-700'}`}>{balanceMH.toFixed(1)}</p>
-                <p className="text-[10px] text-slate-500">Balance MH<span className="block text-[9px] opacity-60">{workOrder.totalPlannedMH} − {newCumulSpentMH.toFixed(1)}</span></p>
+                <p className="text-[10px] text-slate-500">Balance MH<span className="block text-[9px] opacity-60">{workOrder.totalPlannedMH} − {(allPriorSpentMH + totalSpentToday).toFixed(1)} (all team)</span></p>
               </div>
             </div>
             {balanceMH < 0 && (
@@ -267,7 +274,12 @@ function DailyReportForm({ workOrder, teamRates, ppeTeamUsers, existingReports, 
                     {actRows.length === 0 ? (
                       <tr><td colSpan={9} className="px-3 py-4 text-center text-slate-400">No activity rows. Please assign activities in MHE.</td></tr>
                     ) : actRows.map((row, i) => {
-                      const progressUpto = Math.min((row.prevProgress || 0) + (parseFloat(row.todayProgress) || 0), 100)
+                      const prevProgress = row.prevProgress || 0
+                      const todayVal     = parseFloat(row.todayProgress) || 0
+                      const progressUpto = Math.min(prevProgress + todayVal, 100)
+                      const maxToday     = Math.max(0, 100 - prevProgress)
+                      const reachedMax   = prevProgress >= 100 || maxToday === 0
+
                       return (
                         <tr key={row.id || i} className="border-t border-cyan-200 bg-cyan-50">
                           <td className="px-2 py-1 text-slate-400 border-r border-cyan-200">{i + 1}</td>
@@ -280,12 +292,32 @@ function DailyReportForm({ workOrder, teamRates, ppeTeamUsers, existingReports, 
                               onChange={e => updateRow(i, 'spentMHToday', e.target.value)}
                               className="px-2 py-1 text-xs border border-yellow-300 rounded w-full text-right outline-none focus:border-yellow-500 bg-white" />
                           </td>
-                          <td className="px-2 py-1 text-right tabular-nums border-r border-cyan-200 text-slate-500">{row.prevProgress || 0}%</td>
+                          <td className="px-2 py-1 text-right tabular-nums border-r border-cyan-200 text-slate-500">{prevProgress}%</td>
                           <td className="px-1 py-1 border-r border-cyan-200 bg-yellow-50">
-                            <input type="number" min="0" max="100" step="0.5" placeholder="0"
+                            <input
+                              type="number"
+                              min="0"
+                              max={maxToday}
+                              step="0.5"
+                              placeholder={reachedMax ? 'max 100%' : '0'}
                               value={row.todayProgress}
-                              onChange={e => updateRow(i, 'todayProgress', e.target.value)}
-                              className="px-2 py-1 text-xs border border-yellow-300 rounded w-full text-right outline-none focus:border-yellow-500 bg-white" />
+                              disabled={reachedMax}
+                              onChange={e => {
+                                const raw = e.target.value
+                                const num = parseFloat(raw)
+                                if (Number.isNaN(num)) {
+                                  updateRow(i, 'todayProgress', raw)
+                                  return
+                                }
+                                const clamped = Math.max(0, Math.min(num, maxToday))
+                                updateRow(i, 'todayProgress', clamped.toString())
+                              }}
+                              className={`px-2 py-1 text-xs border rounded w-full text-right outline-none bg-white ${
+                                reachedMax
+                                  ? 'border-slate-200 text-slate-400 bg-slate-50 cursor-not-allowed'
+                                  : 'border-yellow-300 focus:border-yellow-500'
+                              }`}
+                            />
                           </td>
                           <td className="px-2 py-1 text-right tabular-nums border-r border-cyan-200 font-semibold text-blue-700">{progressUpto.toFixed(1)}%</td>
                           <td className="px-1 py-1">
@@ -327,7 +359,21 @@ function DailyReportForm({ workOrder, teamRates, ppeTeamUsers, existingReports, 
 
 // ── Detail view ───────────────────────────────────────────────────────────────
 
-function DRDetailModal({ dr, teamRates, ppeTeamUsers, workOrder, onClose }) {
+function DRDetailModal({ dr: initialDr, allDrs = [], teamRates, ppeTeamUsers, workOrder, onClose }) {
+  // Sort allDrs by date ascending so prev = older, next = newer
+  const sortedDrs = useMemo(() =>
+    [...allDrs].sort((a, b) => a.reportDate.localeCompare(b.reportDate)),
+  [allDrs])
+
+  const [currentIndex, setCurrentIndex] = useState(() => {
+    const idx = sortedDrs.findIndex(d => d.id === initialDr.id)
+    return idx >= 0 ? idx : 0
+  })
+
+  const dr = sortedDrs[currentIndex] || initialDr
+  const hasPrev = currentIndex > 0
+  const hasNext = currentIndex < sortedDrs.length - 1
+
   const resolveReporter = (id) => {
     const user = (ppeTeamUsers || []).find(u => u.id === id)
     if (user) return user.name
@@ -337,14 +383,33 @@ function DRDetailModal({ dr, teamRates, ppeTeamUsers, workOrder, onClose }) {
 
   return (
     <div className="px-5 py-4 space-y-4 max-h-[85vh] overflow-y-auto">
-      {/* Header row */}
+      {/* Header row with navigation */}
       <div className="flex items-center justify-between">
-        <div>
-          <p className="text-xs text-slate-400">Work No.</p>
-          <p className="font-bold text-[#0f2035]">{dr.requestWorkNo}</p>
-          <p className="text-xs text-slate-500">{dr.reportDate}</p>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setCurrentIndex(i => i - 1)}
+            disabled={!hasPrev}
+            title="Previous day"
+            className={`p-1.5 rounded-lg border transition-colors ${hasPrev ? 'border-slate-300 text-slate-600 hover:bg-slate-100' : 'border-slate-100 text-slate-300 cursor-not-allowed'}`}>
+            <ChevronLeft size={15} />
+          </button>
+          <div>
+            <p className="text-xs text-slate-400">Work No.</p>
+            <p className="font-bold text-[#0f2035]">{dr.requestWorkNo}</p>
+            <p className="text-xs text-slate-500">{dr.reportDate}</p>
+          </div>
+          <button
+            onClick={() => setCurrentIndex(i => i + 1)}
+            disabled={!hasNext}
+            title="Next day"
+            className={`p-1.5 rounded-lg border transition-colors ${hasNext ? 'border-slate-300 text-slate-600 hover:bg-slate-100' : 'border-slate-100 text-slate-300 cursor-not-allowed'}`}>
+            <ChevronRight size={15} />
+          </button>
         </div>
         <div className="flex flex-col items-end gap-1">
+          {sortedDrs.length > 1 && (
+            <p className="text-[10px] text-slate-400">{currentIndex + 1} / {sortedDrs.length} days</p>
+          )}
           <DRStatusBadge status={dr.isLeaveAbsent ? 'Leave' : (dr.drStatus || 'Submitted')} />
           <p className="text-xs text-slate-500">{resolveReporter(dr.submittedBy)}</p>
         </div>
@@ -571,23 +636,24 @@ function ReviewModal({ dr, teamRates, ppeTeamUsers, workOrder, onReview, onClose
 // ── Main Daily Report Page ────────────────────────────────────────────────────
 
 export default function DailyReport() {
-  const { workOrders, dailyReports, addDailyReport, updateDailyReport, teamRates, userHasRole, userRoles } = useApp()
+  const { workOrders, dailyReports, addDailyReport, updateDailyReport, deleteDailyReport, teamRates, userHasRole, userRoles } = useApp()
   const { firebaseUser, userProfile: authProfile } = useAuth()
 
-  const [activeTab, setActiveTab]     = useState('reports') // 'reports' | 'logsheet'
+  const [activeTab, setActiveTab]     = useState('reports') // 'reports' | 'approve' | 'logsheet'
   const [search, setSearch]           = useState('')
   const [filterWO, setFilterWO]       = useState('All')
   const [activeModal, setActiveModal] = useState(null)
+  const [deleteTarget, setDeleteTarget] = useState(null)
   const [ppeTeamUsers, setPpeTeamUsers] = useState([]) // { id: uid, name, position }
 
-  // Load approved ppeTeam users from Firestore (real-time)
+  // Load all approved users for name resolution (not just ppeTeam)
   useEffect(() => {
     const ref = collection(authDb, 'PPE System', 'root', 'users')
     const unsub = onSnapshot(ref, snap => {
       const users = snap.docs.map(d => d.data())
       setPpeTeamUsers(
         users
-          .filter(u => u.status === 'approved' && Array.isArray(u.role) && u.role.includes('ppeTeam'))
+          .filter(u => u.status === 'approved')
           .map(u => ({ id: u.uid, name: `${u.firstName} ${u.lastName}`.trim(), position: u.position || '' }))
           .sort((a, b) => a.name.localeCompare(b.name))
       )
@@ -598,6 +664,7 @@ export default function DailyReport() {
   const canSubmit  = userHasRole(['ppeTeam', 'ppeLead', 'ppeManager', 'ppeAdmin', 'MasterAdmin'])
   const canReview  = userHasRole(['ppeLead', 'ppeManager', 'ppeAdmin', 'MasterAdmin'])
   const canLogSheet= userHasRole(['ppeLead', 'ppeManager', 'ppeAdmin', 'MasterAdmin', 'GM/MD'])
+  const canDelete  = userHasRole(['ppeAdmin', 'MasterAdmin'])
 
   // ppeTeam-only: see only own reports
   const isPpeTeamOnly = userRoles.length > 0 && userRoles.every(r => r === 'ppeTeam')
@@ -636,8 +703,62 @@ export default function DailyReport() {
     return assignedByName || assignedByUid
   })
 
+  // For each workOrderId+submittedBy pair:
+  // - Show the latest ACCEPTED report (confirmed data) as the main row
+  // - If no accepted report exists, fallback to latest by date
+  // - Track if there's a newer pending report after the latest accepted (for badge)
+  const latestReports = useMemo(() => {
+    const acceptedMap = new Map() // latest Accepted per key
+    const anyMap      = new Map() // latest by date per key (any status)
+    const pendingMap  = new Map() // latest pending (Submitted/Resubmitted) per key
+
+    visibleReports.forEach(dr => {
+      const key = `${dr.workOrderId}__${dr.submittedBy}`
+
+      // Track latest by date (any status)
+      const existingAny = anyMap.get(key)
+      if (!existingAny || dr.reportDate > existingAny.reportDate) {
+        anyMap.set(key, dr)
+      }
+
+      // Track latest Accepted
+      if (dr.drStatus === 'Accepted') {
+        const existingAcc = acceptedMap.get(key)
+        if (!existingAcc || dr.reportDate > existingAcc.reportDate) {
+          acceptedMap.set(key, dr)
+        }
+      }
+
+      // Track latest pending
+      if (['Submitted', 'Resubmitted'].includes(dr.drStatus)) {
+        const existingPending = pendingMap.get(key)
+        if (!existingPending || dr.reportDate > existingPending.reportDate) {
+          pendingMap.set(key, dr)
+        }
+      }
+    })
+
+    // Build result: prefer latest Accepted; attach hasPending flag if newer pending exists
+    const result = []
+    anyMap.forEach((_, key) => {
+      const accepted = acceptedMap.get(key)
+      const pending  = pendingMap.get(key)
+      const any      = anyMap.get(key)
+
+      if (accepted) {
+        // Has accepted report — use it; mark hasPending if there's a newer pending one
+        const hasPending = pending && pending.reportDate > accepted.reportDate
+        result.push({ ...accepted, hasPending: hasPending ? pending : null })
+      } else {
+        // No accepted yet — show latest (pending/submitted)
+        result.push({ ...any, hasPending: null })
+      }
+    })
+    return result
+  }, [visibleReports])
+
   const displayed = useMemo(() => {
-    let list = [...visibleReports]
+    let list = [...latestReports]
     if (filterWO !== 'All') list = list.filter(d => d.workOrderId === filterWO)
     if (search.trim()) {
       const q = search.toLowerCase()
@@ -647,7 +768,7 @@ export default function DailyReport() {
       )
     }
     return list.sort((a, b) => b.reportDate.localeCompare(a.reportDate))
-  }, [visibleReports, search, filterWO])
+  }, [latestReports, search, filterWO])
 
   // Log sheet rows: flatten activityRows per DR
   const logSheetRows = useMemo(() => {
@@ -747,25 +868,27 @@ export default function DailyReport() {
         ))}
       </div>
 
-      {/* Tabs — only show when there are multiple tabs */}
-      {canLogSheet && (
-        <div className="flex gap-1 bg-slate-100 rounded-xl p-1 w-fit">
-          {[
-            { id: 'reports',  label: 'Daily Reports', icon: ClipboardList },
-            { id: 'logsheet', label: 'Log Sheet',     icon: ListChecks },
-          ].map(t => (
-            <button key={t.id} onClick={() => setActiveTab(t.id)}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                activeTab === t.id ? 'bg-white text-[#0f2035] shadow-sm' : 'text-slate-500 hover:text-slate-700'
-              }`}>
-              <t.icon size={14} /> {t.label}
-              {t.id === 'reports' && pendingReview > 0 && (
-                <span className="ml-1 px-1.5 py-0.5 text-[10px] font-bold bg-orange-500 text-white rounded-full">{pendingReview}</span>
-              )}
-            </button>
-          ))}
-        </div>
-      )}
+      {/* Tabs */}
+      <div className="flex gap-1 bg-slate-100 rounded-xl p-1 w-fit">
+        {[
+          { id: 'reports',  label: 'Daily Reports',    icon: ClipboardList, show: true },
+          { id: 'approve',  label: 'Pending Approval', icon: ClipboardCheck, show: canReview },
+          { id: 'logsheet', label: 'Log Sheet',        icon: ListChecks,    show: canLogSheet },
+        ].filter(t => t.show).map(t => (
+          <button key={t.id} onClick={() => setActiveTab(t.id)}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+              activeTab === t.id ? 'bg-white text-[#0f2035] shadow-sm' : 'text-slate-500 hover:text-slate-700'
+            }`}>
+            <t.icon size={14} /> {t.label}
+            {t.id === 'approve' && pendingReview > 0 && (
+              <span className="ml-1 px-1.5 py-0.5 text-[10px] font-bold bg-red-500 text-white rounded-full animate-pulse">{pendingReview}</span>
+            )}
+            {t.id === 'reports' && pendingReview > 0 && !canReview && (
+              <span className="ml-1 px-1.5 py-0.5 text-[10px] font-bold bg-orange-500 text-white rounded-full">{pendingReview}</span>
+            )}
+          </button>
+        ))}
+      </div>
 
       {/* ── Daily Reports tab ── */}
       {activeTab === 'reports' && (
@@ -790,31 +913,35 @@ export default function DailyReport() {
               <table className="w-full text-sm">
                 <thead className="bg-slate-50 border-b border-slate-200">
                   <tr>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Date</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Work No.</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Reported By</th>
-                    <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">Today %</th>
-                    <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">Cumul %</th>
-                    <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">Spent MH</th>
-                    <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">Balance MH</th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Status</th>
-                    <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">Actions</th>
+                    <th className="px-4 py-2 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Date</th>
+                    <th className="px-4 py-2 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Work No.</th>
+                    <th className="px-4 py-2 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Reported By</th>
+                    <th className="px-4 py-2 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">Today %</th>
+                    <th className="px-4 py-2 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">Cumul %</th>
+                    <th className="px-4 py-2 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">Spent MH</th>
+                    <th className="px-4 py-2 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">Balance MH</th>
+                    <th className="px-4 py-2 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Status</th>
+                    <th className="px-4 py-2 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {displayed.length === 0 ? (
-                    <tr><td colSpan={9} className="px-4 py-10 text-center text-slate-400 text-sm">No daily reports found.</td></tr>
+                    <tr><td colSpan={9} className="px-4 py-8 text-center text-slate-400 text-sm">No daily reports found.</td></tr>
                   ) : displayed.map(dr => {
                     const reporterName = getReporterName(dr.submittedBy)
                     const drSt = dr.isLeaveAbsent ? 'Leave' : (dr.drStatus || 'Submitted')
                     const needsReview = ['Submitted','Resubmitted'].includes(drSt)
+                    // hasPending = newer pending report exists after the latest accepted
+                    const pendingDr = dr.hasPending || null
                     return (
-                      <tr key={dr.id} className={`hover:bg-slate-50 transition-colors ${dr.isLeaveAbsent ? 'bg-orange-50/40' : needsReview ? 'bg-blue-50/30' : ''}`}>
-                        <td className="px-4 py-3 text-slate-700 text-xs">
+                      <tr key={dr.id}
+                        onClick={() => openModal('detail', dr)}
+                        className={`cursor-pointer hover:bg-blue-50/50 transition-colors ${dr.isLeaveAbsent ? 'bg-orange-50/40' : needsReview ? 'bg-blue-50/30' : ''}`}>
+                        <td className="px-4 py-1.5 text-slate-700 text-xs">
                           <span className="flex items-center gap-1"><CalendarDays size={12} />{dr.reportDate}</span>
                         </td>
-                        <td className="px-4 py-3 font-semibold text-[#0f2035]">{dr.requestWorkNo}</td>
-                        <td className="px-4 py-3">
+                        <td className="px-4 py-1.5 font-semibold text-[#0f2035]">{dr.requestWorkNo}</td>
+                        <td className="px-4 py-1.5">
                           <div className="flex items-center gap-2">
                             <div className="w-6 h-6 rounded-full bg-[#0f2035] text-white flex items-center justify-center text-[9px] font-bold flex-shrink-0">
                               {reporterName.split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase()||'?'}
@@ -822,12 +949,22 @@ export default function DailyReport() {
                             <span className="text-xs text-slate-700">{reporterName}</span>
                           </div>
                         </td>
-                        <td className="px-4 py-3 text-right tabular-nums text-slate-600">{dr.isLeaveAbsent ? '—' : `${dr.progressToday}%`}</td>
-                        <td className="px-4 py-3 text-right tabular-nums"><span className="font-medium text-blue-700">{dr.cumulativeProgress}%</span></td>
-                        <td className="px-4 py-3 text-right tabular-nums text-slate-600">{dr.isLeaveAbsent ? '—' : dr.spentMHToday}</td>
-                        <td className={`px-4 py-3 text-right font-bold tabular-nums ${dr.balanceMH < 0 ? 'text-red-600' : dr.balanceMH < 30 ? 'text-yellow-600' : 'text-green-700'}`}>{dr.balanceMH}</td>
-                        <td className="px-4 py-3"><DRStatusBadge status={drSt} /></td>
-                        <td className="px-4 py-3">
+                        <td className="px-4 py-1.5 text-right tabular-nums text-slate-600">{dr.isLeaveAbsent ? '—' : `${dr.progressToday}%`}</td>
+                        <td className="px-4 py-1.5 text-right tabular-nums"><span className="font-medium text-blue-700">{dr.cumulativeProgress}%</span></td>
+                        <td className="px-4 py-1.5 text-right tabular-nums text-slate-600">{dr.isLeaveAbsent ? '—' : dr.spentMHToday}</td>
+                        <td className={`px-4 py-1.5 text-right font-bold tabular-nums ${dr.balanceMH < 0 ? 'text-red-600' : dr.balanceMH < 30 ? 'text-yellow-600' : 'text-green-700'}`}>{dr.balanceMH}</td>
+                        <td className="px-4 py-1.5">
+                          <div className="flex flex-col gap-1">
+                            <DRStatusBadge status={drSt} />
+                            {pendingDr && (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-semibold bg-orange-100 text-orange-600 border border-orange-200 whitespace-nowrap">
+                                <span className="w-1.5 h-1.5 rounded-full bg-orange-400 animate-pulse flex-shrink-0" />
+                                {pendingDr.reportDate} รอ Approve
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-4 py-1.5" onClick={e => e.stopPropagation()}>
                           <div className="flex items-center justify-end gap-1.5">
                             {canReview && needsReview && (
                               <button onClick={() => openModal('review', dr)} title="Review Report"
@@ -835,22 +972,31 @@ export default function DailyReport() {
                                 <ThumbsUp size={12} /> Review
                               </button>
                             )}
-                            {canSubmit && ['Needs Correction','Not Submitted'].includes(drSt) && (
+                            {/* Show edit button based on the pending report if exists, else current dr */}
+                            {canSubmit && pendingDr && ['Needs Correction','Not Submitted','Submitted','Resubmitted'].includes(pendingDr.drStatus) && (
+                              <button onClick={() => openModal('edit', pendingDr)} title="Edit pending report"
+                                className="p-1.5 rounded-lg text-orange-400 hover:text-blue-600 hover:bg-blue-50 transition-colors">
+                                <Pencil size={15} />
+                              </button>
+                            )}
+                            {canSubmit && !pendingDr && ['Needs Correction','Not Submitted'].includes(drSt) && (
                               <button onClick={() => openModal('edit', dr)} title="Edit / Resubmit"
                                 className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors">
                                 <Pencil size={15} />
                               </button>
                             )}
-                            {canSubmit && drSt === 'Submitted' && !canReview && (
+                            {canSubmit && !pendingDr && drSt === 'Submitted' && !canReview && (
                               <button onClick={() => openModal('edit', dr)} title="Edit"
                                 className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors">
                                 <Pencil size={15} />
                               </button>
                             )}
-                            <button onClick={() => openModal('detail', dr)} title="View Details"
-                              className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors">
-                              <Eye size={15} />
-                            </button>
+                            {canDelete && (
+                              <button onClick={() => setDeleteTarget(dr)} title="Delete Report"
+                                className="p-1.5 rounded-lg text-slate-400 hover:text-red-600 hover:bg-red-50 transition-colors">
+                                <Trash2 size={15} />
+                              </button>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -861,6 +1007,85 @@ export default function DailyReport() {
             </div>
           </div>
         </>
+      )}
+
+      {/* ── Pending Review tab ── */}
+      {activeTab === 'approve' && canReview && (
+        <div className="space-y-3">
+          {pendingReview === 0 ? (
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm px-6 py-12 flex flex-col items-center gap-3">
+              <div className="w-14 h-14 rounded-full bg-green-50 flex items-center justify-center">
+                <CheckCircle size={28} className="text-green-500" />
+              </div>
+              <p className="text-sm font-semibold text-slate-600">All caught up!</p>
+              <p className="text-xs text-slate-400">No daily reports pending approval.</p>
+            </div>
+          ) : (
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+              <div className="px-4 py-3 bg-[#0f2035] flex items-center gap-3">
+                <ClipboardCheck size={15} className="text-blue-300" />
+                <p className="text-sm font-semibold text-white">Pending Review</p>
+                <span className="ml-1 px-2 py-0.5 text-[10px] font-bold bg-red-500 text-white rounded-full animate-pulse">{pendingReview}</span>
+                <p className="text-xs text-slate-400 ml-auto">Click a row to review</p>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50 border-b border-slate-200">
+                    <tr>
+                      <th className="px-4 py-2 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Date</th>
+                      <th className="px-4 py-2 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Work No.</th>
+                      <th className="px-4 py-2 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Reported By</th>
+                      <th className="px-4 py-2 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">Today %</th>
+                      <th className="px-4 py-2 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">Spent MH</th>
+                      <th className="px-4 py-2 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Status</th>
+                      <th className="px-4 py-2 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">Review</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {visibleReports
+                      .filter(dr => ['Submitted', 'Resubmitted'].includes(dr.drStatus))
+                      .sort((a, b) => a.reportDate.localeCompare(b.reportDate))
+                      .map(dr => {
+                        const reporterName = getReporterName(dr.submittedBy)
+                        const drSt = dr.drStatus || 'Submitted'
+                        return (
+                          <tr key={dr.id}
+                            onClick={() => openModal('review', dr)}
+                            className="cursor-pointer hover:bg-blue-50/50 transition-colors bg-blue-50/20">
+                            <td className="px-4 py-1.5 text-slate-700 text-xs">
+                              <span className="flex items-center gap-1"><CalendarDays size={12} />{dr.reportDate}</span>
+                            </td>
+                            <td className="px-4 py-1.5 font-semibold text-[#0f2035]">{dr.requestWorkNo}</td>
+                            <td className="px-4 py-1.5">
+                              <div className="flex items-center gap-2">
+                                <div className="w-6 h-6 rounded-full bg-[#0f2035] text-white flex items-center justify-center text-[9px] font-bold flex-shrink-0">
+                                  {reporterName.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase() || '?'}
+                                </div>
+                                <span className="text-xs text-slate-700">{reporterName}</span>
+                              </div>
+                            </td>
+                            <td className="px-4 py-1.5 text-right tabular-nums text-slate-600">{dr.isLeaveAbsent ? '—' : `${dr.progressToday}%`}</td>
+                            <td className="px-4 py-1.5 text-right tabular-nums text-slate-600">{dr.isLeaveAbsent ? '—' : dr.spentMHToday}</td>
+                            <td className="px-4 py-1.5"><DRStatusBadge status={drSt} /></td>
+                            <td className="px-4 py-1.5" onClick={e => e.stopPropagation()}>
+                              <div className="flex items-center justify-end gap-1.5">
+                                <button
+                                  onClick={() => openModal('review', dr)}
+                                  title="Review"
+                                  className="flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 transition-colors">
+                                  <ThumbsUp size={12} /> Review
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        )
+                      })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
       )}
 
       {/* ── Log Sheet tab ── */}
@@ -914,7 +1139,7 @@ export default function DailyReport() {
         {activeModal?.data?.wo && (
           <DailyReportForm workOrder={activeModal.data.wo} teamRates={teamRates} ppeTeamUsers={ppeTeamUsers}
             existingReports={dailyReports.filter(d => d.workOrderId === activeModal.data.wo.id)}
-            editTarget={null} onClose={closeModal}
+            editTarget={null} currentUserUid={myUid} onClose={closeModal}
             onSave={data => { addDailyReport(data); closeModal() }} />
         )}
       </Modal>
@@ -926,7 +1151,7 @@ export default function DailyReport() {
           return wo ? (
             <DailyReportForm workOrder={wo} teamRates={teamRates} ppeTeamUsers={ppeTeamUsers}
               existingReports={dailyReports.filter(d => d.workOrderId === wo.id)}
-              editTarget={activeModal.data} onClose={closeModal}
+              editTarget={activeModal.data} currentUserUid={myUid} onClose={closeModal}
               onSave={data => { updateDailyReport(activeModal.data.id, { ...data, drStatus: 'Resubmitted' }); closeModal() }} />
           ) : null
         })()}
@@ -943,12 +1168,28 @@ export default function DailyReport() {
       </Modal>
 
       <Modal isOpen={activeModal?.type === 'detail'} onClose={closeModal}
-        title={`Daily Report Detail — ${activeModal?.data?.reportDate || ''}`} size="xl">
+        title={`Daily Report — ${activeModal?.data?.requestWorkNo || ''}`} size="xl">
         {activeModal?.data && (
-          <DRDetailModal dr={activeModal.data} teamRates={teamRates} ppeTeamUsers={ppeTeamUsers}
-            workOrder={getWorkOrder(activeModal.data.workOrderId)} onClose={closeModal} />
+          <DRDetailModal
+            dr={activeModal.data}
+            allDrs={visibleReports.filter(d =>
+              d.workOrderId === activeModal.data.workOrderId &&
+              d.submittedBy === activeModal.data.submittedBy
+            )}
+            teamRates={teamRates}
+            ppeTeamUsers={ppeTeamUsers}
+            workOrder={getWorkOrder(activeModal.data.workOrderId)}
+            onClose={closeModal} />
         )}
       </Modal>
+
+      <ConfirmDialog
+        isOpen={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={() => { deleteDailyReport(deleteTarget.id); setDeleteTarget(null) }}
+        title="Delete Daily Report"
+        message={`Are you sure you want to delete the report for "${deleteTarget?.requestWorkNo}" on ${deleteTarget?.reportDate}? This action cannot be undone.`}
+      />
     </div>
   )
 }

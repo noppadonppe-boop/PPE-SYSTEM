@@ -76,10 +76,23 @@ function WODetailModal({ wo, dailyReports, teamRates, onClose }) {
   const woDrs = dailyReports.filter(d => d.workOrderId === wo.id)
     .sort((a, b) => b.reportDate.localeCompare(a.reportDate))
 
-  const latestDr       = woDrs[0]
-  const cumulativeProgress = latestDr?.cumulativeProgress ?? 0
-  const cumulativeSpentMH  = latestDr?.cumulativeSpentMH  ?? 0
-  const balanceMH          = wo.totalPlannedMH - cumulativeSpentMH
+  // Total spent MH = sum of ALL team members' spentMHToday across all DRs for this WO
+  const cumulativeSpentMH = woDrs
+    .filter(d => !d.isLeaveAbsent)
+    .reduce((s, d) => s + (d.spentMHToday || 0), 0)
+  const balanceMH = wo.totalPlannedMH - cumulativeSpentMH
+
+  // Overall progress = average of the latest cumulativeProgress per unique reporter
+  const latestPerUser = new Map()
+  woDrs.forEach(d => {
+    if (!latestPerUser.has(d.submittedBy) || d.reportDate > latestPerUser.get(d.submittedBy).reportDate) {
+      latestPerUser.set(d.submittedBy, d)
+    }
+  })
+  const userLatestDrs = Array.from(latestPerUser.values())
+  const cumulativeProgress = userLatestDrs.length > 0
+    ? Math.round(userLatestDrs.reduce((s, d) => s + (d.cumulativeProgress || 0), 0) / userLatestDrs.length)
+    : 0
 
   const assignedMembers = (wo.assignedTeam || [])
     .map(id => teamRates.find(t => t.id === id)).filter(Boolean)
@@ -188,8 +201,50 @@ function WODetailModal({ wo, dailyReports, teamRates, onClose }) {
 
 // ── Work Progress Report Modal ───────────────────────────────────────────────
 
-function WorkProgressModal({ wo, onClose }) {
+function WorkProgressModal({ wo, reports, onClose }) {
   const activityRows = wo.mheRows || wo.wbsItems || []
+
+  // Latest accepted activity status per activity+engineer (what ppeLead reviewed)
+  const acceptedDrs = useMemo(
+    () => (reports || [])
+      .filter(d => d.workOrderId === wo.id && d.drStatus === 'Accepted')
+      .sort((a, b) => a.reportDate.localeCompare(b.reportDate)),
+    [reports, wo.id]
+  )
+
+  const latestActivityMap = useMemo(() => {
+    const map = new Map()
+    acceptedDrs.forEach(dr => {
+      const rows = dr.activityRows || []
+      rows.forEach(row => {
+        const name = (row.activityName || row.task || '').trim()
+        const eng  = (row.assignEngineer || dr.submittedBy || '').trim()
+        const key  = `${name}__${eng}`
+        const existing = map.get(key)
+        if (!existing || dr.reportDate > existing.reportDate) {
+          map.set(key, { row, reportDate: dr.reportDate })
+        }
+      })
+    })
+    return map
+  }, [acceptedDrs])
+
+  const resolveLatestFor = (baseRow) => {
+    const name = (baseRow.activityName || baseRow.task || '').trim()
+    const eng  = (baseRow.assignEngineer || '').trim()
+    if (!name) return null
+
+    const key = `${name}__${eng}`
+    let match = latestActivityMap.get(key)
+
+    // Fallback: match by activity name only if engineer key not found
+    if (!match) {
+      match = Array.from(latestActivityMap.values()).find(
+        v => (v.row.activityName || v.row.task || '').trim() === name
+      ) || null
+    }
+    return match
+  }
 
   return (
     <div className="px-6 py-5 space-y-4 max-h-[80vh] overflow-y-auto">
@@ -234,10 +289,31 @@ function WorkProgressModal({ wo, onClose }) {
                   <td className="px-3 py-2 font-medium text-slate-800 border-r border-cyan-200 whitespace-nowrap">{row.activityName || row.task || '—'}</td>
                   <td className="px-3 py-2 text-right tabular-nums border-r border-cyan-200">{row.totalMH || 0}</td>
                   <td className="px-3 py-2 border-r border-cyan-200">{row.assignEngineer || '—'}</td>
-                  <td className="px-3 py-2 text-right border-r border-cyan-200">—</td>
-                  <td className="px-3 py-2 text-right border-r border-cyan-200">—</td>
-                  <td className="px-3 py-2 text-right border-r border-cyan-200">—</td>
-                  <td className="px-3 py-2">—</td>
+                  {(() => {
+                    const latest = resolveLatestFor(row)
+                    if (!latest) {
+                      return (
+                        <>
+                          <td className="px-3 py-2 text-right border-r border-cyan-200 text-slate-400">—</td>
+                          <td className="px-3 py-2 text-right border-r border-cyan-200 text-slate-400">—</td>
+                          <td className="px-3 py-2 text-right border-r border-cyan-200 text-slate-400">—</td>
+                          <td className="px-3 py-2 text-slate-400">—</td>
+                        </>
+                      )
+                    }
+                    const prev   = latest.row.prevProgress || 0
+                    const today  = parseFloat(latest.row.todayProgress) || 0
+                    const upto   = Math.min(prev + today, 100)
+                    const note   = latest.row.note || ''
+                    return (
+                      <>
+                        <td className="px-3 py-2 text-right border-r border-cyan-200 font-semibold text-slate-700">{today}%</td>
+                        <td className="px-3 py-2 text-right border-r border-cyan-200 text-slate-600">{prev}%</td>
+                        <td className="px-3 py-2 text-right border-r border-cyan-200 font-bold text-blue-700">{upto.toFixed(1)}%</td>
+                        <td className="px-3 py-2">{note || '—'}</td>
+                      </>
+                    )
+                  })()}
                 </tr>
               ))}
             </tbody>
@@ -314,10 +390,29 @@ export default function WorkOrders() {
     pending:   pendingWOs.length,
   }
 
-  const getLatestDr = (woId) => {
+  // Aggregate stats across ALL team members for a WO
+  const getWOStats = (woId) => {
     const drs = dailyReports.filter(d => d.workOrderId === woId)
-      .sort((a, b) => b.reportDate.localeCompare(a.reportDate))
-    return drs[0] || null
+    if (drs.length === 0) return { totalSpentMH: 0, avgProgress: 0 }
+
+    // Total spent MH = sum of every DR's spentMHToday (non-leave)
+    const totalSpentMH = drs
+      .filter(d => !d.isLeaveAbsent)
+      .reduce((s, d) => s + (d.spentMHToday || 0), 0)
+
+    // Progress = average of latest cumulativeProgress per reporter
+    const latestPerUser = new Map()
+    drs.forEach(d => {
+      if (!latestPerUser.has(d.submittedBy) || d.reportDate > latestPerUser.get(d.submittedBy).reportDate) {
+        latestPerUser.set(d.submittedBy, d)
+      }
+    })
+    const userDrs = Array.from(latestPerUser.values())
+    const avgProgress = userDrs.length > 0
+      ? Math.round(userDrs.reduce((s, d) => s + (d.cumulativeProgress || 0), 0) / userDrs.length)
+      : 0
+
+    return { totalSpentMH, avgProgress }
   }
 
   const openModal = (type, wo) => setActiveModal({ type, wo })
@@ -426,9 +521,9 @@ export default function WorkOrders() {
                   </td>
                 </tr>
               ) : displayed.map(wo => {
-                const latestDr = getLatestDr(wo.id)
-                const cumProgress = latestDr?.cumulativeProgress ?? 0
-                const cumSpentMH  = latestDr?.cumulativeSpentMH  ?? 0
+                const { totalSpentMH, avgProgress } = getWOStats(wo.id)
+                const cumProgress = avgProgress
+                const cumSpentMH  = totalSpentMH
                 const balanceMH   = wo.totalPlannedMH - cumSpentMH
 
                 return (
@@ -546,7 +641,7 @@ export default function WorkOrders() {
       <Modal isOpen={activeModal?.type === 'progress'} onClose={closeModal}
         title={`Work Progress Report — ${activeModal?.wo?.requestWorkNo || ''}`} size="xl">
         {activeModal?.wo && (
-          <WorkProgressModal wo={activeModal.wo} onClose={closeModal} />
+          <WorkProgressModal wo={activeModal.wo} reports={dailyReports} onClose={closeModal} />
         )}
       </Modal>
 
