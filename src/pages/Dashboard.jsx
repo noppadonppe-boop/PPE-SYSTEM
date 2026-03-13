@@ -46,7 +46,7 @@ function DonutLabel({ cx, cy, total }) {
 
 // ─── Executive Dashboard ──────────────────────────────────────────────────────
 export default function Dashboard() {
-  const { rfqs, workOrders, dailyReports, teamRates, currentRole } = useApp()
+  const { rfqs, workOrders, dailyReports, teamRates, currentRole, userRoles } = useApp()
 
   // ── KPI derivations ────────────────────────────────────────────────────────
   const activeProjects   = workOrders.filter(w => w.status === 'Ongoing').length
@@ -142,8 +142,8 @@ export default function Dashboard() {
           <p className="text-slate-300 text-xs mt-0.5">Executive Dashboard — Live project intelligence</p>
         </div>
         <div className="text-right">
-          <p className="text-slate-300 text-xs">Viewing as</p>
-          <p className="text-white font-semibold text-sm">{currentRole}</p>
+          <p className="text-slate-300 text-xs">Roles</p>
+          <p className="text-white font-semibold text-sm">{(userRoles ?? [currentRole]).join(', ')}</p>
         </div>
       </div>
 

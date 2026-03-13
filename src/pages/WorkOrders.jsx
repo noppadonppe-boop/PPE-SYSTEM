@@ -4,8 +4,16 @@ import {
   CheckCircle, PlayCircle, AlertTriangle, Rocket, Trash2, RotateCcw,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
+import { useAuth } from '../context/AuthContext'
 import Modal from '../components/ui/Modal'
 import StatusBadge from '../components/ui/StatusBadge'
+
+// Returns a comma-separated list of unique assigned engineer names for a work order
+function getAssignedEngineers(wo) {
+  const rows = wo.mheRows || wo.wbsItems || []
+  const names = [...new Set(rows.map(r => r.assignEngineer).filter(Boolean))]
+  return names.join(', ') || '—'
+}
 
 function formatIDR(v) {
   if (!v && v !== 0) return '—'
@@ -247,14 +255,22 @@ function WorkProgressModal({ wo, onClose }) {
 // ── Main WorkOrders Page ──────────────────────────────────────────────────────
 
 export default function WorkOrders() {
-  const { rfqs, workOrders, addWorkOrder, updateWorkOrder, deleteWorkOrder, dailyReports, teamRates, currentRole } = useApp()
+  const { rfqs, workOrders, addWorkOrder, updateWorkOrder, deleteWorkOrder, dailyReports, teamRates, userHasRole, userRoles } = useApp()
+  const { firebaseUser, userProfile: authProfile } = useAuth()
 
   const [search, setSearch]             = useState('')
   const [filterStatus, setFilterStatus] = useState('All')
   const [activeModal, setActiveModal]   = useState(null) // { type, wo }
 
-  const canActivate  = ['ppeLead', 'ppeManager', 'ppeAdmin', 'MasterAdmin', 'GM/MD'].includes(currentRole)
-  const isSuperAdmin = ['ppeAdmin', 'MasterAdmin'].includes(currentRole)
+  const canActivate    = userHasRole(['ppeLead', 'ppeManager', 'ppeAdmin', 'MasterAdmin', 'GM/MD'])
+  const isSuperAdmin   = userHasRole(['ppeAdmin', 'MasterAdmin'])
+  const isPpeTeamOnly  = userRoles.length > 0 && userRoles.every(r => r === 'ppeTeam')
+
+  // For ppeTeam: current user's full name and uid used to match assigned engineer
+  const myFullName = authProfile
+    ? `${authProfile.firstName} ${authProfile.lastName}`.trim()
+    : ''
+  const myUid = firebaseUser?.uid ?? ''
 
   // Approved RFQs (either 'Approved' or 'Approved to Process') that don't yet have a WO
   const existingRfqIds = useMemo(() => new Set(workOrders.map(w => w.rfqId)), [workOrders])
@@ -266,8 +282,19 @@ export default function WorkOrders() {
     ),
   [rfqs, existingRfqIds])
 
+  // ppeTeam sees only work orders where they are an assigned engineer
+  const visibleWorkOrders = useMemo(() => {
+    if (!isPpeTeamOnly) return workOrders
+    return workOrders.filter(wo => {
+      const rows = wo.mheRows || wo.wbsItems || []
+      const assignedByName = rows.some(r => r.assignEngineer && r.assignEngineer === myFullName)
+      const assignedByUid  = myUid && Array.isArray(wo.assignedTeam) && wo.assignedTeam.includes(myUid)
+      return assignedByName || assignedByUid
+    })
+  }, [workOrders, isPpeTeamOnly, myFullName, myUid])
+
   const displayed = useMemo(() => {
-    let list = [...workOrders]
+    let list = [...visibleWorkOrders]
     if (filterStatus !== 'All') list = list.filter(w => w.status === filterStatus)
     if (search.trim()) {
       const q = search.toLowerCase()
@@ -277,13 +304,13 @@ export default function WorkOrders() {
       )
     }
     return list.sort((a, b) => (b.planStart || '').localeCompare(a.planStart || ''))
-  }, [workOrders, search, filterStatus])
+  }, [visibleWorkOrders, search, filterStatus])
 
   // Stats
   const stats = {
-    total:     workOrders.length,
-    ongoing:   workOrders.filter(w => w.status === 'Ongoing').length,
-    completed: workOrders.filter(w => w.status === 'Completed').length,
+    total:     visibleWorkOrders.length,
+    ongoing:   visibleWorkOrders.filter(w => w.status === 'Ongoing').length,
+    completed: visibleWorkOrders.filter(w => w.status === 'Completed').length,
     pending:   pendingWOs.length,
   }
 
@@ -381,6 +408,7 @@ export default function WorkOrders() {
               <tr>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Work No.</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Client</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Assign Engineer</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Plan Start</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider">Plan Finish</th>
                 <th className="px-4 py-3 text-right text-xs font-semibold text-slate-500 uppercase tracking-wider">Planned MH</th>
@@ -393,7 +421,7 @@ export default function WorkOrders() {
             <tbody className="divide-y divide-slate-100">
               {displayed.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="px-4 py-10 text-center text-slate-400 text-sm">
+                  <td colSpan={10} className="px-4 py-10 text-center text-slate-400 text-sm">
                     No work orders found. Approve an RFQ first to generate work orders.
                   </td>
                 </tr>
@@ -407,6 +435,9 @@ export default function WorkOrders() {
                   <tr key={wo.id} className="hover:bg-slate-50 transition-colors">
                     <td className="px-4 py-3 font-semibold text-[#0f2035]">{wo.requestWorkNo}</td>
                     <td className="px-4 py-3 text-slate-700 max-w-[140px] truncate">{wo.client}</td>
+                    <td className="px-4 py-3 text-slate-600 text-xs max-w-[180px]">
+                      <span className="truncate block" title={getAssignedEngineers(wo)}>{getAssignedEngineers(wo)}</span>
+                    </td>
                     <td className="px-4 py-3 text-slate-600 text-xs">
                       {wo.planStart ? <span className="flex items-center gap-1"><CalendarDays size={12} />{wo.planStart}</span> : <span className="text-slate-400">—</span>}
                     </td>

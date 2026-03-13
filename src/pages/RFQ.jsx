@@ -1,9 +1,10 @@
-import React, { useState, useMemo, useRef } from 'react'
+import React, { useState, useMemo, useRef, useCallback, useEffect } from 'react'
 import {
   Plus, Eye, Search, Trash2, CheckCircle, XCircle, ArrowRight,
   Calculator, Users, DollarSign, ClipboardList, FileText,
   ChevronRight, InboxIcon, ClipboardCheck, BadgeCheck,
   Pencil, Link2, Upload, Image, MessageSquare, Download, FileUp, Save,
+  Loader2, ZoomIn,
 } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import { useApp } from '../context/AppContext'
@@ -11,6 +12,10 @@ import Modal from '../components/ui/Modal'
 import ConfirmDialog from '../components/ui/ConfirmDialog'
 import StatusBadge from '../components/ui/StatusBadge'
 import QuotationPreview from '../components/QuotationPreview'
+import { uploadFile, deleteFile } from '../firebase/storageService'
+import { collection, onSnapshot } from 'firebase/firestore'
+import { db as authDb } from '../firebase/firebaseAuth'
+import { useAuth } from '../context/AuthContext'
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -88,33 +93,109 @@ function LeadReceiveForm({ rfq, onAccept, onReturn, onClose }) {
     onAccept({ receivedDate, leadNote: note, status: 'Pending MH' })
   }
 
+  const F = ({ label, value }) => value ? (
+    <div>
+      <p className="text-xs text-slate-400">{label}</p>
+      <p className="font-semibold text-slate-800 text-sm break-words">{value}</p>
+    </div>
+  ) : null
+
   return (
     <div className="px-6 py-5 space-y-5">
 
       {/* RFQ Summary Card */}
-      <div className="bg-slate-50 rounded-xl border border-slate-200 p-4 space-y-2">
-        <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">Request Summary</p>
-        <div className="grid grid-cols-2 gap-3 text-sm">
-          <div><p className="text-xs text-slate-400">Work No.</p><p className="font-semibold text-slate-800">{rfq.requestWorkNo}</p></div>
-          <div><p className="text-xs text-slate-400">Type of Service</p><p className="font-semibold text-slate-800">{rfq.serviceType || rfq.type}</p></div>
-          <div><p className="text-xs text-slate-400">Requestor</p><p className="font-semibold text-slate-800">{rfq.requestor || rfq.client}</p></div>
-          <div><p className="text-xs text-slate-400">Date Requested</p><p className="font-semibold text-slate-800">{rfq.dateRequest || rfq.submittedAt}</p></div>
-          <div><p className="text-xs text-slate-400">S1 : สถานที่ทำงาน</p><p className="font-semibold text-slate-800">{rfq.s1Location || '—'}</p></div>
-          <div><p className="text-xs text-slate-400">S2 : ประเภทงาน</p><p className="font-semibold text-slate-800">{rfq.s2WorkType || '—'}</p></div>
+      <div className="bg-slate-50 rounded-xl border border-slate-200 p-4 space-y-4">
+        <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Request Summary</p>
+
+        {/* Row 1 */}
+        <div className="grid grid-cols-2 gap-x-6 gap-y-3">
+          <F label="Request Work No."    value={rfq.requestWorkNo} />
+          <F label="Type of Service"     value={rfq.serviceType || rfq.type} />
+          <F label="Date Request Work"   value={rfq.dateRequest || rfq.submittedAt} />
+          <F label="Urgency"             value={rfq.urgency} />
+          <F label="Requestor"           value={rfq.requestor} />
+          <F label="E-mail Requestor"    value={rfq.emailRequestor} />
+          <F label="Tel."                value={rfq.tel} />
+          <F label="Project No."         value={rfq.projectNo} />
+          <F label="Client / Project Owner" value={rfq.client} />
         </div>
-        {rfq.s3WorkKind && (
-          <div><p className="text-xs text-slate-400">S3 : ชนิดงาน</p><p className="text-sm font-semibold text-slate-800">{rfq.s3WorkKind}</p></div>
-        )}
+
+        {/* Scope Classification */}
+        <div className="border-t border-slate-200 pt-3">
+          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Scope Classification</p>
+          <div className="grid grid-cols-2 gap-x-6 gap-y-3">
+            <F label="S1 : สถานที่ทำงาน" value={rfq.s1Location} />
+            <F label="S2 : ประเภทงาน"   value={rfq.s2WorkType} />
+            <F label="S3 : ชนิดงาน"     value={rfq.s3WorkKind} />
+          </div>
+        </div>
+
+        {/* Scope of Work */}
         {rfq.details && (
-          <div><p className="text-xs text-slate-400 mt-1">Scope of Work</p>
-            <p className="text-xs text-slate-700 bg-white border border-slate-200 rounded-lg p-2 mt-1">{rfq.details}</p></div>
+          <div className="border-t border-slate-200 pt-3">
+            <p className="text-xs text-slate-400 mb-1">Scope of Work</p>
+            <p className="text-xs text-slate-700 bg-white border border-slate-200 rounded-lg p-3 leading-relaxed whitespace-pre-wrap">{rfq.details}</p>
+          </div>
+        )}
+
+        {/* Link */}
+        {rfq.linkUrl && (
+          <div className="border-t border-slate-200 pt-3">
+            <p className="text-xs text-slate-400 mb-1">Reference Link</p>
+            <a href={rfq.linkUrl} target="_blank" rel="noopener noreferrer"
+              className="text-xs text-blue-600 hover:underline break-all">{rfq.linkUrl}</a>
+          </div>
+        )}
+
+        {/* Attachments */}
+        {rfq.attachments?.length > 0 && (
+          <div className="border-t border-slate-200 pt-3">
+            <p className="text-xs text-slate-400 mb-2">Attachments ({rfq.attachments.length})</p>
+            <ul className="space-y-1">
+              {rfq.attachments.map((f, i) => (
+                <li key={i} className="flex items-center gap-2 text-xs bg-white border border-slate-200 rounded-lg px-3 py-1.5">
+                  <span className="text-slate-500">📎</span>
+                  <a href={f.url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline truncate max-w-[260px]">{f.name}</a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {/* Photos */}
+        {rfq.photos?.length > 0 && (
+          <div className="border-t border-slate-200 pt-3">
+            <p className="text-xs text-slate-400 mb-2">Photos ({rfq.photos.length})</p>
+            <div className="flex flex-wrap gap-2">
+              {rfq.photos.map((f, i) => (
+                <a key={i} href={f.url} target="_blank" rel="noopener noreferrer" title={f.name}>
+                  <img src={f.url} alt={f.name}
+                    className="w-20 h-20 object-cover rounded-lg border border-slate-200 hover:opacity-80 transition-opacity" />
+                </a>
+              ))}
+            </div>
+          </div>
         )}
       </div>
 
+      {/* Revision Note banner — shown when requestor has resubmitted a returned RFQ */}
+      {rfq.revisionNote && (
+        <div className="bg-blue-50 border border-blue-300 rounded-xl px-4 py-3 space-y-1">
+          <div className="flex items-center gap-2">
+            <MessageSquare size={14} className="text-blue-600 flex-shrink-0" />
+            <p className="text-xs font-bold text-blue-700 uppercase tracking-wider">Revision Note from Requestor</p>
+            {rfq.resubmittedAt && (
+              <span className="ml-auto text-[10px] text-blue-500 font-normal">Resubmitted: {rfq.resubmittedAt}</span>
+            )}
+          </div>
+          <p className="text-sm text-blue-800 bg-white border border-blue-200 rounded-lg px-3 py-2 leading-relaxed whitespace-pre-wrap">{rfq.revisionNote}</p>
+        </div>
+      )}
+
       {/* Return note banner (if previously returned) */}
-      {rfq.status === 'Returned' && rfq.leadNote && (
+      {rfq.leadNote && (
         <div className="bg-orange-50 border border-orange-200 rounded-lg px-4 py-3">
-          <p className="text-xs font-semibold text-orange-700 mb-1">Previously returned with note:</p>
+          <p className="text-xs font-semibold text-orange-700 mb-1">Lead note (previous review):</p>
           <p className="text-xs text-orange-600">{rfq.leadNote}</p>
         </div>
       )}
@@ -157,43 +238,190 @@ function LeadReceiveForm({ rfq, onAccept, onReturn, onClose }) {
   )
 }
 
+// ─── Image Lightbox ───────────────────────────────────────────────────────────
+
+function Lightbox({ src, name, onClose }) {
+  if (!src) return null
+  return (
+    <div
+      className="fixed inset-0 z-[9999] bg-black/80 flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <div className="relative max-w-4xl max-h-[90vh] flex flex-col items-center" onClick={e => e.stopPropagation()}>
+        <button
+          onClick={onClose}
+          className="absolute -top-3 -right-3 w-7 h-7 rounded-full bg-white text-slate-700 hover:bg-red-100 hover:text-red-600 flex items-center justify-center shadow-lg z-10"
+        >
+          <XCircle size={16} />
+        </button>
+        <img src={src} alt={name} className="max-w-full max-h-[80vh] object-contain rounded-lg shadow-2xl" />
+        {name && <p className="mt-2 text-xs text-white/70 truncate max-w-full">{name}</p>}
+      </div>
+    </div>
+  )
+}
+
 // ─── File Upload Field ────────────────────────────────────────────────────────
+// Files are uploaded to Firebase Storage — only URL + metadata stored in Firestore.
+
+const MAX_FILES = 10
+const FOLDER_DOCS   = 'rfq-attachments/docs'
+const FOLDER_PHOTOS = 'rfq-attachments/photos'
 
 function FileUploadField({ label, accept, icon, files = [], onChange, isImage }) {
-  const ref = useRef(null)
-  const handleFiles = (e) => {
+  const inputRef = useRef(null)
+  // uploading: { [tmpId]: { name, progress } }
+  const [uploading, setUploading] = useState({})
+  const [lightbox, setLightbox]   = useState(null) // { src, name }
+
+  const handleFiles = useCallback(async (e) => {
     const selected = Array.from(e.target.files)
-    const readers = selected.map(f => new Promise(resolve => {
-      const r = new FileReader()
-      r.onload = () => resolve({ name: f.name, url: r.result })
-      r.readAsDataURL(f)
-    }))
-    Promise.all(readers).then(newFiles => onChange([...files, ...newFiles]))
     e.target.value = ''
+    if (!selected.length) return
+
+    const remaining = MAX_FILES - files.length
+    if (remaining <= 0) {
+      window.alert(`สามารถแนบไฟล์ได้สูงสุด ${MAX_FILES} ไฟล์`)
+      return
+    }
+    const toUpload = selected.slice(0, remaining)
+    const folder   = isImage ? FOLDER_PHOTOS : FOLDER_DOCS
+
+    // Upload each file concurrently
+    await Promise.all(toUpload.map(async (file) => {
+      const tmpId = `tmp-${Date.now()}-${Math.random()}`
+      setUploading(prev => ({ ...prev, [tmpId]: { name: file.name, progress: 0 } }))
+      try {
+        const result = await uploadFile(file, folder, (pct) => {
+          setUploading(prev => prev[tmpId] ? { ...prev, [tmpId]: { ...prev[tmpId], progress: pct } } : prev)
+        })
+        // Add completed file to list
+        onChange(prev => [...prev, result])
+      } catch (err) {
+        console.error('Upload failed:', err)
+        window.alert(`อัปโหลดไฟล์ "${file.name}" ไม่สำเร็จ\n${err?.code || err?.message || 'unknown error'}`)
+      } finally {
+        setUploading(prev => { const n = { ...prev }; delete n[tmpId]; return n })
+      }
+    }))
+  }, [files, isImage, onChange])
+
+  const remove = async (i) => {
+    const f = files[i]
+    if (f?.storagePath) {
+      try { await deleteFile(f.storagePath) } catch (_) { /* ignore */ }
+    }
+    onChange(prev => prev.filter((_, idx) => idx !== i))
   }
-  const remove = (i) => onChange(files.filter((_, idx) => idx !== i))
+
+  const uploadingList = Object.entries(uploading)
+  const isUploading   = uploadingList.length > 0
+
   return (
     <div>
+      {lightbox && <Lightbox src={lightbox.src} name={lightbox.name} onClose={() => setLightbox(null)} />}
+
       <label className="block text-xs font-semibold text-slate-600 mb-1 flex items-center gap-1">
         {icon} {label}
+        {isUploading && <Loader2 size={12} className="animate-spin text-blue-500 ml-1" />}
       </label>
+
+      {/* Drop zone */}
       <div
-        onClick={() => ref.current?.click()}
-        className="cursor-pointer border-2 border-dashed border-slate-300 hover:border-blue-400 rounded-lg px-3 py-3 text-center transition-colors bg-slate-50 hover:bg-blue-50"
+        onClick={() => !isUploading && inputRef.current?.click()}
+        className={`cursor-pointer border-2 border-dashed rounded-lg px-3 py-3 text-center transition-colors ${
+          isUploading
+            ? 'border-blue-300 bg-blue-50 cursor-not-allowed'
+            : 'border-slate-300 hover:border-blue-400 bg-slate-50 hover:bg-blue-50'
+        }`}
       >
-        <p className="text-xs text-slate-400">{isImage ? 'Click to add photos' : 'Click to attach files'}</p>
-        <p className="text-[10px] text-slate-300 mt-0.5">{accept.replace(/\./g, '').toUpperCase()}</p>
+        {isUploading ? (
+          <p className="text-xs text-blue-600 font-medium">กำลังอัปโหลด…</p>
+        ) : (
+          <>
+            <p className="text-xs text-slate-400">{isImage ? 'คลิกเพื่อเพิ่มรูปภาพ' : 'คลิกเพื่อแนบไฟล์'}</p>
+            <p className="text-[10px] text-slate-300 mt-0.5">
+              สูงสุด {MAX_FILES} ไฟล์ · {accept.replace(/\./g, '').toUpperCase()}
+            </p>
+          </>
+        )}
       </div>
-      <input ref={ref} type="file" accept={accept} multiple className="hidden" onChange={handleFiles} />
-      {files.length > 0 && (
+      <input ref={inputRef} type="file" accept={accept} multiple className="hidden" onChange={handleFiles} />
+
+      {/* Uploading progress items */}
+      {uploadingList.length > 0 && (
         <ul className="mt-2 space-y-1">
-          {files.map((f, i) => (
-            <li key={i} className="flex items-center justify-between bg-white border border-slate-200 rounded-lg px-2 py-1 text-xs">
-              <span className="truncate text-slate-700 max-w-[140px]" title={f.name}>{isImage ? '🖼 ' : '📎 '}{f.name}</span>
-              <button onClick={() => remove(i)} className="ml-2 text-slate-400 hover:text-red-500 flex-shrink-0"><XCircle size={13} /></button>
+          {uploadingList.map(([id, u]) => (
+            <li key={id} className="bg-blue-50 border border-blue-200 rounded-lg px-2 py-1.5 text-xs">
+              <div className="flex justify-between mb-0.5">
+                <span className="text-blue-700 truncate max-w-[180px]">{u.name}</span>
+                <span className="text-blue-500 font-mono">{u.progress}%</span>
+              </div>
+              <div className="h-1 bg-blue-100 rounded-full overflow-hidden">
+                <div className="h-1 bg-blue-500 rounded-full transition-all" style={{ width: `${u.progress}%` }} />
+              </div>
             </li>
           ))}
         </ul>
+      )}
+
+      {/* Completed files */}
+      {files.length > 0 && (
+        isImage ? (
+          /* Photo grid with thumbnails */
+          <div className="mt-2 flex flex-wrap gap-2">
+            {files.map((f, i) => (
+              <div key={i} className="relative group w-20 h-20 flex-shrink-0">
+                <img
+                  src={f.url}
+                  alt={f.name}
+                  className="w-20 h-20 object-cover rounded-lg border border-slate-200 cursor-pointer hover:opacity-90 transition-opacity"
+                  onClick={() => setLightbox({ src: f.url, name: f.name })}
+                />
+                {/* Zoom hint */}
+                <div
+                  className="absolute inset-0 rounded-lg bg-black/0 group-hover:bg-black/20 flex items-center justify-center transition-all cursor-pointer"
+                  onClick={() => setLightbox({ src: f.url, name: f.name })}
+                >
+                  <ZoomIn size={16} className="text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+                </div>
+                {/* Delete */}
+                <button
+                  onClick={() => remove(i)}
+                  className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-red-500 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow"
+                >
+                  <XCircle size={12} />
+                </button>
+                <p className="text-[9px] text-slate-500 truncate mt-0.5 max-w-[80px]" title={f.name}>{f.name}</p>
+              </div>
+            ))}
+          </div>
+        ) : (
+          /* Document list */
+          <ul className="mt-2 space-y-1">
+            {files.map((f, i) => (
+              <li key={i} className="flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-2 py-1.5 text-xs group">
+                <span className="flex-shrink-0">📎</span>
+                <a
+                  href={f.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="truncate text-blue-600 hover:underline flex-1 max-w-[160px]"
+                  title={f.name}
+                >{f.name}</a>
+                <span className="text-slate-400 text-[10px] flex-shrink-0">
+                  {f.size ? `${(f.size / 1024).toFixed(0)} KB` : ''}
+                </span>
+                <button
+                  onClick={() => remove(i)}
+                  className="ml-auto flex-shrink-0 text-slate-300 hover:text-red-500 transition-colors"
+                >
+                  <XCircle size={13} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )
       )}
     </div>
   )
@@ -223,9 +451,11 @@ const EMPTY_RFQ_FORM = {
 }
 
 function Stage1Form({ onSave, onSaveDraft, onClose, initial, isRevise }) {
+  const { userProfile } = useAuth()
   const [form, setForm] = useState(initial || EMPTY_RFQ_FORM)
   const [errors, setErrors] = useState({})
   const [revisionNote, setRevisionNote] = useState('')
+  const [saving, setSaving] = useState(false) // true while Firestore write is in flight
 
   // Auto-generate work no prefix when serviceType changes
   const handleServiceType = (val) => {
@@ -239,6 +469,18 @@ function Stage1Form({ onSave, onSaveDraft, onClose, initial, isRevise }) {
   React.useEffect(() => {
     if (!form.requestWorkNo) handleServiceType(form.serviceType)
   }, [])
+
+  // Auto-fill requestor name & email from logged-in user (only for new RFQs, not edits/revisions)
+  React.useEffect(() => {
+    if (!initial && userProfile) {
+      const fullName = `${userProfile.firstName} ${userProfile.lastName}`.trim()
+      setForm(p => ({
+        ...p,
+        requestor:      p.requestor      || fullName,
+        emailRequestor: p.emailRequestor || userProfile.email,
+      }))
+    }
+  }, [userProfile])
 
   const set = (key, val) => setForm(p => ({ ...p, [key]: val }))
 
@@ -441,7 +683,7 @@ function Stage1Form({ onSave, onSaveDraft, onClose, initial, isRevise }) {
           accept=".pdf,.doc,.docx,.xls,.xlsx,.txt,.zip"
           icon={<Upload size={14} />}
           files={form.attachments}
-          onChange={files => set('attachments', files)}
+          onChange={updater => setForm(p => ({ ...p, attachments: typeof updater === 'function' ? updater(p.attachments) : updater }))}
         />
         {/* Photo Upload */}
         <FileUploadField
@@ -449,7 +691,7 @@ function Stage1Form({ onSave, onSaveDraft, onClose, initial, isRevise }) {
           accept="image/*"
           icon={<Image size={14} />}
           files={form.photos}
-          onChange={files => set('photos', files)}
+          onChange={updater => setForm(p => ({ ...p, photos: typeof updater === 'function' ? updater(p.photos) : updater }))}
           isImage
         />
       </div>
@@ -482,17 +724,34 @@ function Stage1Form({ onSave, onSaveDraft, onClose, initial, isRevise }) {
       )}
 
       <div className="flex justify-between gap-3 pt-2 border-t border-slate-100">
-        <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg">Cancel</button>
+        <button onClick={onClose} disabled={saving} className="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg disabled:opacity-50">Cancel</button>
         <div className="flex gap-3">
           {onSaveDraft && (
-            <button onClick={() => onSaveDraft(form)}
-              className="px-4 py-2 text-sm font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-lg flex items-center gap-2">
-              <Save size={14} /> Save Draft
+            <button
+              disabled={saving}
+              onClick={async () => {
+                setSaving(true)
+                try { await onSaveDraft(form) }
+                finally { setSaving(false) }
+              }}
+              className="px-4 py-2 text-sm font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-lg flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+              {saving ? 'กำลังบันทึก…' : 'Save Draft'}
             </button>
           )}
-          <button onClick={() => validate() && onSave(form, revisionNote)}
-            className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg flex items-center gap-2">
-            Submit RFQ <ArrowRight size={14} />
+          <button
+            disabled={saving}
+            onClick={async () => {
+              if (!validate()) return
+              setSaving(true)
+              try { await onSave(form, revisionNote) }
+              finally { setSaving(false) }
+            }}
+            className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            {saving ? <Loader2 size={14} className="animate-spin" /> : <ArrowRight size={14} />}
+            {saving ? 'กำลังส่ง…' : 'Submit RFQ'}
           </button>
         </div>
       </div>
@@ -514,6 +773,21 @@ const EMPTY_MHE_ROW = { activityName: '', type: 'Drawing', additionalInfo: '', q
 function Stage2Form({ rfq, onSave, onSaveDraft, onClose }) {
   const { teamRates, unitRates } = useApp()
   const [showUnitRef, setShowUnitRef] = useState(false)
+  const [ppeTeamUsers, setPpeTeamUsers] = useState([])
+
+  useEffect(() => {
+    const ref = collection(authDb, 'PPE System', 'root', 'users')
+    const unsub = onSnapshot(ref, snap => {
+      const users = snap.docs.map(d => d.data())
+      setPpeTeamUsers(
+        users
+          .filter(u => u.status === 'approved' && Array.isArray(u.role) && u.role.includes('ppeTeam'))
+          .map(u => ({ id: u.uid, name: `${u.firstName} ${u.lastName}`.trim() }))
+          .sort((a, b) => a.name.localeCompare(b.name))
+      )
+    })
+    return unsub
+  }, [])
   const [mheNo]        = useState(rfq.mheNo || genMheNo(rfq))
   const [dateStart,      setDateStart]      = useState(rfq.dateStart      || '')
   const [dateCompletion, setDateCompletion] = useState(rfq.dateCompletion || '')
@@ -560,7 +834,7 @@ function Stage2Form({ rfq, onSave, onSaveDraft, onClose }) {
   }))
 
   const totalMH = rows.reduce((s, r) => s + (r.totalMH || 0), 0)
-  const engOptions = teamRates.map(e => e.name)
+  const engOptions = ppeTeamUsers.map(e => e.name)
   const canSubmit = rows.some(r => r.activityName.trim()) && dateCompletion
 
   // ── Excel helpers ────────────────────────────────────────────────────────
@@ -620,20 +894,26 @@ function Stage2Form({ rfq, onSave, onSaveDraft, onClose }) {
   const buildPayload = (targetStatus) => ({
     mheNo, dateStart, dateCompletion, mheRows: rows,
     wbsItems: rows.map(r => ({ id: r.id, task: r.activityName, unit: 'activity', qty: parseFloat(r.qty)||0, unitMH: parseFloat(r.unitMH)||0, totalMH: r.totalMH||0, type: r.type, additionalInfo: r.additionalInfo, assignEngineer: r.assignEngineer, note: r.note })),
-    assignedEngineers: [...new Set(rows.filter(r => r.assignEngineer).map(r => teamRates.find(t => t.name === r.assignEngineer)?.id).filter(Boolean))],
+    assignedEngineers: [...new Set(rows.filter(r => r.assignEngineer).map(r => ppeTeamUsers.find(t => t.name === r.assignEngineer)?.id).filter(Boolean))],
     totalPlannedMH: +totalMH.toFixed(2),
     status: targetStatus,
   })
 
-  const handleSaveDraft = () => {
-    if (onSaveDraft) {
+  const [draftSaving, setDraftSaving] = useState(false)
+
+  const handleSaveDraft = async () => {
+    if (!onSaveDraft) return
+    setDraftSaving(true)
+    try {
       // Save ONLY the MHE data — never change the workflow status
       const { mheNo: mn, dateStart: ds, dateCompletion: dc, mheRows: mr,
               wbsItems: wi, assignedEngineers: ae, totalPlannedMH: tp } = buildPayload(rfq.status)
-      onSaveDraft({ mheNo: mn, dateStart: ds, dateCompletion: dc,
-                    mheRows: mr, wbsItems: wi, assignedEngineers: ae, totalPlannedMH: tp })
+      await onSaveDraft({ mheNo: mn, dateStart: ds, dateCompletion: dc,
+                          mheRows: mr, wbsItems: wi, assignedEngineers: ae, totalPlannedMH: tp })
       setDraftSaved(true)
       setTimeout(() => setDraftSaved(false), 2500)
+    } finally {
+      setDraftSaving(false)
     }
   }
 
@@ -888,21 +1168,18 @@ function Stage2Form({ rfq, onSave, onSaveDraft, onClose }) {
 
       <div className="flex justify-between gap-3 pt-2 border-t border-slate-100 flex-wrap">
         <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg">Cancel</button>
-        <div className="flex items-center gap-2">
-          {/* Save Draft */}
-          <button onClick={handleSaveDraft}
-            className="px-4 py-2 text-sm font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded-lg flex items-center gap-2">
-            <Save size={14} />
-            {draftSaved ? 'Saved ✓' : 'Save Draft'}
-          </button>
-          {/* Submit */}
-          <button
-            onClick={() => canSubmit && onSave(buildPayload('Pending Manager'))}
-            disabled={!canSubmit}
-            className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
-            Submit to Cost Estimate <ArrowRight size={14} />
-          </button>
-        </div>
+        <button
+          onClick={async () => {
+            if (!canSubmit) return
+            setDraftSaving(true)
+            try { await onSave(buildPayload('Pending Manager')) }
+            finally { setDraftSaving(false) }
+          }}
+          disabled={!canSubmit || draftSaving}
+          className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
+          {draftSaving ? <Loader2 size={14} className="animate-spin" /> : <ArrowRight size={14} />}
+          {draftSaving ? 'กำลังส่ง…' : 'Submit to Cost Estimate'}
+        </button>
       </div>
     </div>
   )
@@ -988,11 +1265,17 @@ function Stage3Form({ rfq, onSave, onSaveDraft, onClose, onCancel }) {
     costDraftNote:     submitNote,
   })
 
-  const handleSaveDraft = () => {
-    if (onSaveDraft) {
-      onSaveDraft(buildCostPayload())
+  const [costSaving, setCostSaving] = useState(false)
+
+  const handleSaveDraft = async () => {
+    if (!onSaveDraft) return
+    setCostSaving(true)
+    try {
+      await onSaveDraft(buildCostPayload())
       setDraftSaved(true)
       setTimeout(() => setDraftSaved(false), 2500)
+    } finally {
+      setCostSaving(false)
     }
   }
 
@@ -1206,30 +1489,43 @@ function Stage3Form({ rfq, onSave, onSaveDraft, onClose, onCancel }) {
       </div>
 
       <div className="flex justify-between gap-3 pt-2 border-t border-slate-100 flex-wrap">
-        <button onClick={() => setShowConfirmCancel(true)}
-          className="px-4 py-2 text-sm font-medium text-red-600 border border-red-200 bg-red-50 hover:bg-red-100 rounded-lg flex items-center gap-2">
+        <button onClick={() => setShowConfirmCancel(true)} disabled={costSaving}
+          className="px-4 py-2 text-sm font-medium text-red-600 border border-red-200 bg-red-50 hover:bg-red-100 rounded-lg flex items-center gap-2 disabled:opacity-50">
           <XCircle size={15} /> Cancel RFQ
         </button>
         <div className="flex gap-3 flex-wrap">
-          <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg">Close</button>
-          <button onClick={() => setShowQuotePreview(true)}
-            className="px-4 py-2 text-sm font-medium text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-300 rounded-lg flex items-center gap-2">
+          <button onClick={onClose} disabled={costSaving} className="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg disabled:opacity-50">Close</button>
+          <button onClick={() => setShowQuotePreview(true)} disabled={costSaving}
+            className="px-4 py-2 text-sm font-medium text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-300 rounded-lg flex items-center gap-2 disabled:opacity-50">
             <FileText size={14} /> Preview Quotation
           </button>
-          <button onClick={handleSaveDraft}
-            className="px-4 py-2 text-sm font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded-lg flex items-center gap-2">
-            <Save size={14} />
-            {draftSaved ? 'Saved ✓' : 'Save Draft'}
+          <button
+            onClick={handleSaveDraft}
+            disabled={costSaving}
+            className="px-4 py-2 text-sm font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded-lg flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed">
+            {costSaving
+              ? <><Loader2 size={14} className="animate-spin" /> กำลังบันทึก…</>
+              : draftSaved
+                ? <><CheckCircle size={14} className="text-green-600" /> Saved ✓</>
+                : <><Save size={14} /> Save Draft</>
+            }
           </button>
           <button
-            onClick={() => canSubmit && onSave({
-              ...buildCostPayload(),
-              costComments: [...commentHistory, { role: 'ppeManager', date: new Date().toISOString().split('T')[0], note: submitNote }],
-              status: 'Pending Approval',
-            })}
-            disabled={!canSubmit}
+            onClick={async () => {
+              if (!canSubmit) return
+              setCostSaving(true)
+              try {
+                await onSave({
+                  ...buildCostPayload(),
+                  costComments: [...commentHistory, { role: 'ppeManager', date: new Date().toISOString().split('T')[0], note: submitNote }],
+                  status: 'Pending Approval',
+                })
+              } finally { setCostSaving(false) }
+            }}
+            disabled={!canSubmit || costSaving}
             className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
-            Submit to Requestor <ArrowRight size={14} />
+            {costSaving ? <Loader2 size={14} className="animate-spin" /> : <ArrowRight size={14} />}
+            {costSaving ? 'กำลังส่ง…' : 'Submit to Requestor'}
           </button>
         </div>
       </div>
@@ -1672,10 +1968,6 @@ function RFQTable({ rows, onAction, onDetail, onEdit, onDelete, actionLabel, act
 
   const filtered = useMemo(() => {
     let list = [...rows]
-    // Non-Requestor roles cannot see Draft RFQs
-    if (!['Requestor', 'ppeAdmin', 'MasterAdmin'].includes(role)) {
-      list = list.filter(r => r.status !== 'Draft')
-    }
     if (filterStatus !== 'All') list = list.filter(r => r.status === filterStatus)
     if (search.trim()) {
       const q = search.toLowerCase()
@@ -1686,7 +1978,12 @@ function RFQTable({ rows, onAction, onDetail, onEdit, onDelete, actionLabel, act
         (r.details || '').toLowerCase().includes(q)
       )
     }
-    return list.sort((a, b) => (b.submittedAt || '').localeCompare(a.submittedAt || ''))
+    // Sort: newest first — use savedAt for Drafts, submittedAt for others
+    return list.sort((a, b) => {
+      const da = b.submittedAt || b.savedAt || b.id || ''
+      const db = a.submittedAt || a.savedAt || a.id || ''
+      return da.localeCompare(db)
+    })
   }, [rows, search, filterStatus])
 
   const canDelete = (rfq) => isMasterAdmin || !['Approved', 'Approved to Process'].includes(rfq.status)
@@ -1810,47 +2107,66 @@ const TABS = [
 ]
 
 export default function RFQ() {
-  const { rfqs, addRfq, updateRfq, deleteRfq, currentRole } = useApp()
+  const { rfqs, addRfq, updateRfq, deleteRfq, userHasRole, userRoles, currentRole } = useApp()
+  const { firebaseUser, userProfile: authProfile } = useAuth()
   const [activeTab, setActiveTab]         = useState('request')
   const [activeModal, setActiveModal]     = useState(null)
   const [deleteTarget, setDeleteTarget]   = useState(null)
 
-  const openModal  = (type, rfq = null) => setActiveModal({ type, rfq })
+  const openModal  = (type, rfq = null) => setActiveModal({ type, rfqId: rfq?.id ?? null })
   const closeModal = () => setActiveModal(null)
+
+  // Always resolve the latest version of the RFQ from the live Firestore snapshot.
+  // This ensures that after Save Draft the modal re-opens with fresh data.
+  const liveRfq = activeModal?.rfqId
+    ? rfqs.find(r => r.id === activeModal.rfqId) ?? null
+    : null
 
   const handleDelete = (rfq) => setDeleteTarget(rfq)
   const confirmDelete = async () => {
     if (deleteTarget) { await deleteRfq(deleteTarget.id); setDeleteTarget(null) }
   }
 
-  const isMasterAdmin = ['ppeAdmin', 'MasterAdmin'].includes(currentRole)
+  const isMasterAdmin = userHasRole(['ppeAdmin', 'MasterAdmin'])
   const canCreateRfq  = true
-  const canPlanMH     = ['ppeLead', 'ppeAdmin', 'MasterAdmin'].includes(currentRole)
-  const canCostEst    = ['ppeManager', 'ppeAdmin', 'MasterAdmin'].includes(currentRole)
-  const canApprove    = ['Requestor', 'GM/MD', 'ppeAdmin', 'MasterAdmin'].includes(currentRole)
+  const canPlanMH     = userHasRole(['ppeLead', 'ppeAdmin', 'MasterAdmin'])
+  const canCostEst    = userHasRole(['ppeManager', 'ppeAdmin', 'MasterAdmin'])
+  const canApprove    = userHasRole(['Requestor', 'GM/MD', 'ppeAdmin', 'MasterAdmin'])
 
-  // Reset to a valid tab when the current one becomes inaccessible (e.g. ppeLead on 'cost')
+  // ppeLead-only (no higher roles) cannot see cost tab
+  const isPpeleadOnly = userRoles.length > 0 && userRoles.every(r => r === 'ppeLead')
+
+  // Requestor role: show only their own RFQs
+  const isRequestorOnly = userRoles.length > 0 && userRoles.every(r => r === 'Requestor')
+  const visibleRfqs = isRequestorOnly
+    ? rfqs.filter(r =>
+        (firebaseUser && r.submittedByUid === firebaseUser.uid) ||
+        (authProfile?.email && r.emailRequestor === authProfile.email)
+      )
+    : rfqs
+
+  // Reset to a valid tab when the current one becomes inaccessible
   React.useEffect(() => {
-    if (activeTab === 'cost' && currentRole === 'ppeLead') {
+    if (activeTab === 'cost' && isPpeleadOnly) {
       setActiveTab('manhour')
     }
-  }, [currentRole, activeTab])
+  }, [isPpeleadOnly, activeTab])
 
   // Per-tab filtered lists
-  const pendingLeadRfqs       = rfqs.filter(r => r.status === 'Pending Lead')
-  const returnedRfqs          = rfqs.filter(r => r.status === 'Returned')
-  const needClarifyRfqs       = rfqs.filter(r => r.status === 'Need Clarify')
-  const pendingMHRfqs         = rfqs.filter(r => r.status === 'Pending MH')
-  const pendingManagerRfqs    = rfqs.filter(r => r.status === 'Pending Manager')
-  const pendingApprovalRfqs   = rfqs.filter(r => r.status === 'Pending Approval')
-  const approvedToProcessRfqs = rfqs.filter(r => r.status === 'Approved to Process')
+  const pendingLeadRfqs       = visibleRfqs.filter(r => r.status === 'Pending Lead')
+  const returnedRfqs          = visibleRfqs.filter(r => r.status === 'Returned')
+  const needClarifyRfqs       = visibleRfqs.filter(r => r.status === 'Need Clarify')
+  const pendingMHRfqs         = visibleRfqs.filter(r => r.status === 'Pending MH')
+  const pendingManagerRfqs    = visibleRfqs.filter(r => r.status === 'Pending Manager')
+  const pendingApprovalRfqs   = visibleRfqs.filter(r => r.status === 'Pending Approval')
+  const approvedToProcessRfqs = visibleRfqs.filter(r => r.status === 'Approved to Process')
 
-  // Cost tab hidden from ppeLead (but not from ppeAdmin/MasterAdmin)
-  const canSeeCostTab = isMasterAdmin || !['ppeLead'].includes(currentRole)
+  // Cost tab hidden only if user is EXCLUSIVELY ppeLead (has no higher role)
+  const canSeeCostTab = isMasterAdmin || !isPpeleadOnly
 
   // Summary stats
   const stats = [
-    { label: 'Total RFQs',          value: rfqs.length,                  cls: 'text-slate-800',  bg: 'bg-slate-50' },
+    { label: 'Total RFQs',          value: visibleRfqs.length,           cls: 'text-slate-800',  bg: 'bg-slate-50' },
     { label: 'Pending Review',       value: pendingLeadRfqs.length,       cls: 'text-yellow-600', bg: 'bg-yellow-50' },
     { label: 'Need Clarify',         value: needClarifyRfqs.length,       cls: 'text-pink-600',   bg: 'bg-pink-50' },
     { label: 'Pending MH Plan',      value: pendingMHRfqs.length,         cls: 'text-blue-600',   bg: 'bg-blue-50' },
@@ -1992,9 +2308,9 @@ export default function RFQ() {
 
               {/* All RFQs */}
               <div>
-                <p className="text-xs font-semibold text-slate-500 mb-2">All Submissions</p>
+                <p className="text-xs font-semibold text-slate-500 mb-2">{isRequestorOnly ? 'My Submissions' : 'All Submissions'}</p>
                 <RFQTable
-                  rows={rfqs}
+                  rows={visibleRfqs}
                   role={currentRole}
                   onDetail={(rfq) => openModal('detail', rfq)}
                   onEdit={(rfq) => openModal('edit', rfq)}
@@ -2183,6 +2499,7 @@ export default function RFQ() {
                 ...form,
                 status: 'Draft',
                 submittedBy: currentRole,
+                submittedByUid: firebaseUser?.uid ?? '',
                 savedAt: new Date().toISOString().split('T')[0],
               })
               closeModal()
@@ -2199,6 +2516,7 @@ export default function RFQ() {
                 ...form,
                 status: 'Pending Lead',
                 submittedBy: currentRole,
+                submittedByUid: firebaseUser?.uid ?? '',
                 submittedAt: new Date().toISOString().split('T')[0],
               })
               closeModal()
@@ -2214,28 +2532,38 @@ export default function RFQ() {
 
       {/* Edit RFQ (only for non-Approved/non-Approved to Process) */}
       <Modal isOpen={activeModal?.type === 'edit'} onClose={closeModal}
-        title={`Edit RFQ — ${activeModal?.rfq?.requestWorkNo || ''}`} size="lg">
-        {activeModal?.rfq && (
-          ['Approved', 'Approved to Process'].includes(activeModal.rfq.status) ? (
+        title={`Edit RFQ — ${liveRfq?.requestWorkNo || ''}`} size="lg">
+        {liveRfq && (
+          ['Approved', 'Approved to Process'].includes(liveRfq.status) ? (
             <div className="px-6 py-8 text-center text-slate-500">
               <CheckCircle size={32} className="mx-auto text-green-500 mb-3" />
-              <p className="font-semibold">This RFQ is {activeModal.rfq.status}</p>
+              <p className="font-semibold">This RFQ is {liveRfq.status}</p>
               <p className="text-xs mt-1">RFQs that have been approved cannot be edited or deleted.</p>
               <button onClick={closeModal} className="mt-4 px-4 py-2 text-sm bg-slate-100 rounded-lg">Close</button>
             </div>
           ) : (
             <>
-              <div className="px-6 pt-4"><Stepper status={activeModal.rfq.status} /></div>
+              <div className="px-6 pt-4"><Stepper status={liveRfq.status} /></div>
               <Stage1Form
-                initial={activeModal.rfq}
+                initial={liveRfq}
                 onClose={closeModal}
-                onSaveDraft={activeModal.rfq.status === 'Draft' ? (form) => {
-                  updateRfq(activeModal.rfq.id, { ...form, status: 'Draft', savedAt: new Date().toISOString().split('T')[0] })
-                  closeModal()
+                onSaveDraft={liveRfq.status === 'Draft' ? async (form) => {
+                  try {
+                    await updateRfq(liveRfq.id, { ...form, status: 'Draft', savedAt: new Date().toISOString().split('T')[0] })
+                    closeModal()
+                  } catch (err) {
+                    console.error('Failed to save draft:', err)
+                    window.alert(`บันทึก Draft ไม่สำเร็จ (${err?.code || err?.message || 'unknown'})`)
+                  }
                 } : undefined}
-                onSave={(form) => {
-                  updateRfq(activeModal.rfq.id, { ...form, ...(activeModal.rfq.status === 'Draft' ? { status: 'Pending Lead', submittedAt: new Date().toISOString().split('T')[0] } : {}) })
-                  closeModal()
+                onSave={async (form) => {
+                  try {
+                    await updateRfq(liveRfq.id, { ...form, ...(liveRfq.status === 'Draft' ? { status: 'Pending Lead', submittedAt: new Date().toISOString().split('T')[0] } : {}) })
+                    closeModal()
+                  } catch (err) {
+                    console.error('Failed to update RFQ:', err)
+                    window.alert(`อัปเดต RFQ ไม่สำเร็จ (${err?.code || err?.message || 'unknown'})`)
+                  }
                 }}
               />
             </>
@@ -2244,25 +2572,30 @@ export default function RFQ() {
       </Modal>
 
       {/* Revise & Resubmit (Returned RFQs) */}
-      <Modal isOpen={activeModal?.type === 'revise'} onClose={closeModal} title={`Revise & Resubmit — ${activeModal?.rfq?.requestWorkNo || ''}`} size="lg">
-        {activeModal?.rfq && (
+      <Modal isOpen={activeModal?.type === 'revise'} onClose={closeModal} title={`Revise & Resubmit — ${liveRfq?.requestWorkNo || ''}`} size="lg">
+        {liveRfq && (
           <>
             <div className="px-6 pt-4">
-              <Stepper status={activeModal.rfq.status} />
-              {activeModal.rfq.leadNote && (
+              <Stepper status={liveRfq.status} />
+              {liveRfq.leadNote && (
                 <div className="bg-orange-50 border border-orange-200 rounded-lg px-4 py-3 mb-4">
                   <p className="text-xs font-semibold text-orange-700 mb-1">Returned by PPE Lead with note:</p>
-                  <p className="text-xs text-orange-600">{activeModal.rfq.leadNote}</p>
+                  <p className="text-xs text-orange-600">{liveRfq.leadNote}</p>
                 </div>
               )}
             </div>
             <Stage1Form
-              initial={activeModal.rfq}
+              initial={liveRfq}
               onClose={closeModal}
               isRevise
-              onSave={(form, revisionNote) => {
-                updateRfq(activeModal.rfq.id, { ...form, status: 'Pending Lead', leadNote: '', resubmittedAt: new Date().toISOString().split('T')[0], revisionNote })
-                closeModal()
+              onSave={async (form, revisionNote) => {
+                try {
+                  await updateRfq(liveRfq.id, { ...form, status: 'Pending Lead', leadNote: '', resubmittedAt: new Date().toISOString().split('T')[0], revisionNote })
+                  closeModal()
+                } catch (err) {
+                  console.error('Failed to resubmit RFQ:', err)
+                  window.alert(`Resubmit ไม่สำเร็จ (${err?.code || err?.message || 'unknown'})`)
+                }
               }}
             />
           </>
@@ -2271,15 +2604,31 @@ export default function RFQ() {
 
       {/* Lead Receive — Review & Accept/Return */}
       <Modal isOpen={activeModal?.type === 'leadReceive'} onClose={closeModal}
-        title={`Lead Review — ${activeModal?.rfq?.requestWorkNo || ''}`} size="lg">
-        {activeModal?.rfq && (
+        title={`Lead Review — ${liveRfq?.requestWorkNo || ''}`} size="lg">
+        {liveRfq && (
           <>
-            <div className="px-6 pt-4"><Stepper status={activeModal.rfq.status} /></div>
+            <div className="px-6 pt-4"><Stepper status={liveRfq.status} /></div>
             <LeadReceiveForm
-              rfq={activeModal.rfq}
+              rfq={liveRfq}
               onClose={closeModal}
-              onReturn={(data) => { updateRfq(activeModal.rfq.id, data); closeModal() }}
-              onAccept={(data) => { updateRfq(activeModal.rfq.id, data); closeModal() }}
+              onReturn={async (data) => {
+                try {
+                  await updateRfq(liveRfq.id, data)
+                  closeModal()
+                } catch (err) {
+                  console.error('Failed to return RFQ:', err)
+                  window.alert(`Return RFQ ไม่สำเร็จ (${err?.code || err?.message || 'unknown'})`)
+                }
+              }}
+              onAccept={async (data) => {
+                try {
+                  await updateRfq(liveRfq.id, data)
+                  closeModal()
+                } catch (err) {
+                  console.error('Failed to accept RFQ:', err)
+                  window.alert(`Accept RFQ ไม่สำเร็จ (${err?.code || err?.message || 'unknown'})`)
+                }
+              }}
             />
           </>
         )}
@@ -2287,47 +2636,85 @@ export default function RFQ() {
 
       {/* Stage 2 — Manhour Plan */}
       <Modal isOpen={activeModal?.type === 'stage2'} onClose={closeModal}
-        title={`Manhour Plan — ${activeModal?.rfq?.requestWorkNo || ''}`} size="2xl" draggable>
-        {activeModal?.rfq && (
+        title={`Manhour Plan — ${liveRfq?.requestWorkNo || ''}`} size="2xl" draggable>
+        {liveRfq && (
           <>
-            <div className="px-6 pt-4"><Stepper status={activeModal.rfq.status} /></div>
-            <Stage2Form rfq={activeModal.rfq} onClose={closeModal}
-              onSave={(data) => { updateRfq(activeModal.rfq.id, data); closeModal() }}
-              onSaveDraft={(data) => updateRfq(activeModal.rfq.id, data)} />
+            <div className="px-6 pt-4"><Stepper status={liveRfq.status} /></div>
+            <Stage2Form key={liveRfq.id} rfq={liveRfq} onClose={closeModal}
+              onSave={async (data) => {
+                try {
+                  await updateRfq(liveRfq.id, data)
+                  closeModal()
+                } catch (err) {
+                  console.error('Failed to submit MH Plan:', err)
+                  window.alert(`Submit Manhour Plan ไม่สำเร็จ (${err?.code || err?.message || 'unknown'})`)
+                }
+              }} />
           </>
         )}
       </Modal>
 
       {/* Stage 3 — Cost Estimate */}
       <Modal isOpen={activeModal?.type === 'stage3'} onClose={closeModal}
-        title={`Cost Estimate — ${activeModal?.rfq?.requestWorkNo || ''}`} size="2xl" draggable>
-        {activeModal?.rfq && (
+        title={`Cost Estimate — ${liveRfq?.requestWorkNo || ''}`} size="2xl" draggable>
+        {liveRfq && (
           <>
-            <div className="px-6 pt-5"><Stepper status={activeModal.rfq.status} /></div>
-            <Stage3Form rfq={activeModal.rfq} onClose={closeModal}
-              onSave={(data) => { updateRfq(activeModal.rfq.id, data); closeModal() }}
-              onSaveDraft={(data) => updateRfq(activeModal.rfq.id, data)}
-              onCancel={() => { updateRfq(activeModal.rfq.id, { status: 'Cancelled' }); closeModal() }} />
+            <div className="px-6 pt-5"><Stepper status={liveRfq.status} /></div>
+            <Stage3Form key={liveRfq.id} rfq={liveRfq} onClose={closeModal}
+              onSave={async (data) => {
+                try {
+                  await updateRfq(liveRfq.id, data)
+                  closeModal()
+                } catch (err) {
+                  console.error('Failed to submit Cost Estimate:', err)
+                  window.alert(`Submit Cost Estimate ไม่สำเร็จ (${err?.code || err?.message || 'unknown'})`)
+                }
+              }}
+              onSaveDraft={async (data) => {
+                try {
+                  await updateRfq(liveRfq.id, data)
+                } catch (err) {
+                  console.error('Failed to save Cost draft:', err)
+                  window.alert(`บันทึก Draft Cost ไม่สำเร็จ (${err?.code || err?.message || 'unknown'})`)
+                }
+              }}
+              onCancel={async () => {
+                try {
+                  await updateRfq(liveRfq.id, { status: 'Cancelled' })
+                  closeModal()
+                } catch (err) {
+                  console.error('Failed to cancel RFQ:', err)
+                  window.alert(`Cancel RFQ ไม่สำเร็จ (${err?.code || err?.message || 'unknown'})`)
+                }
+              }} />
           </>
         )}
       </Modal>
 
       {/* Stage 4 — Approval */}
       <Modal isOpen={activeModal?.type === 'stage4'} onClose={closeModal}
-        title={`Approval — ${activeModal?.rfq?.requestWorkNo || ''}`} size="lg">
-        {activeModal?.rfq && (
+        title={`Approval — ${liveRfq?.requestWorkNo || ''}`} size="lg">
+        {liveRfq && (
           <>
-            <div className="px-6 pt-5"><Stepper status={activeModal.rfq.status} /></div>
-            <Stage4Form rfq={activeModal.rfq} onClose={closeModal}
-              onSave={(data) => { updateRfq(activeModal.rfq.id, data); closeModal() }} />
+            <div className="px-6 pt-5"><Stepper status={liveRfq.status} /></div>
+            <Stage4Form key={liveRfq.id} rfq={liveRfq} onClose={closeModal}
+              onSave={async (data) => {
+                try {
+                  await updateRfq(liveRfq.id, data)
+                  closeModal()
+                } catch (err) {
+                  console.error('Failed to save approval:', err)
+                  window.alert(`บันทึก Approval ไม่สำเร็จ (${err?.code || err?.message || 'unknown'})`)
+                }
+              }} />
           </>
         )}
       </Modal>
 
       {/* Detail View */}
       <Modal isOpen={activeModal?.type === 'detail'} onClose={closeModal}
-        title={`RFQ Details — ${activeModal?.rfq?.requestWorkNo || ''}`} size="lg">
-        {activeModal?.rfq && <RFQDetail rfq={activeModal.rfq} onClose={closeModal} role={currentRole} />}
+        title={`RFQ Details — ${liveRfq?.requestWorkNo || ''}`} size="lg">
+        {liveRfq && <RFQDetail rfq={liveRfq} onClose={closeModal} role={currentRole} />}
       </Modal>
 
       {/* Delete Confirm */}

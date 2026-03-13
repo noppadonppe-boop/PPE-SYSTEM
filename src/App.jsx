@@ -1,7 +1,7 @@
 import React, { lazy, Suspense } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { AppProvider, useApp } from './context/AppContext'
-import { AuthProvider } from './context/AuthContext'
+import { AuthProvider, useAuth } from './context/AuthContext'
 import Layout from './components/layout/Layout'
 import ProtectedRoute from './components/auth/ProtectedRoute'
 
@@ -20,11 +20,30 @@ const WorkOrders   = lazy(() => import('./pages/WorkOrders'))
 const DailyReport  = lazy(() => import('./pages/DailyReport'))
 const ReportSummary = lazy(() => import('./pages/ReportSummary'))
 
+// Redirect index to /dashboard for PPE roles, /rfq for Requestor-only
+function HomeRedirect() {
+  const { userHasRole } = useApp()
+  const canSeeDashboard = userHasRole(['ppeLead', 'ppeManager', 'ppeTeam', 'ppeAdmin', 'MasterAdmin', 'GM/MD'])
+  return <Navigate to={canSeeDashboard ? '/dashboard' : '/rfq'} replace />
+}
+
 // ─── DB loading / error gate (inside AppProvider) ────────────────────────────
 function AppRoutes() {
   const { loading, dbError } = useApp()
+  const { firebaseUser, loading: authLoading } = useAuth()
 
-  if (loading) {
+  // Wait for auth to finish initialising first
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-[#0f2035] flex flex-col items-center justify-center gap-4">
+        <div className="w-12 h-12 border-4 border-white/20 border-t-white rounded-full animate-spin" />
+        <p className="text-white/80 text-sm font-medium font-sarabun">กำลังตรวจสอบสิทธิ์…</p>
+      </div>
+    )
+  }
+
+  // Only show DB loading spinner when user is logged in (otherwise go to login page)
+  if (loading && firebaseUser) {
     return (
       <div className="min-h-screen bg-[#0f2035] flex flex-col items-center justify-center gap-4">
         <div className="w-12 h-12 border-4 border-white/20 border-t-white rounded-full animate-spin" />
@@ -33,7 +52,8 @@ function AppRoutes() {
     )
   }
 
-  if (dbError) {
+  // Only show DB error when user is logged in (not a permissions issue from being unauthenticated)
+  if (dbError && firebaseUser) {
     return (
       <div className="min-h-screen bg-[#0f2035] flex flex-col items-center justify-center gap-4 px-6">
         <div className="bg-red-500/20 border border-red-400/40 rounded-xl px-6 py-5 max-w-md text-center">
@@ -69,8 +89,12 @@ function AppRoutes() {
             <Layout />
           </ProtectedRoute>
         }>
-          <Route index                      element={<Navigate to="/dashboard" replace />} />
-          <Route path="dashboard"           element={<Dashboard />} />
+          <Route index                      element={<HomeRedirect />} />
+          <Route path="dashboard"           element={
+            <ProtectedRoute requireApproved requireRoles={['ppeLead', 'ppeManager', 'ppeTeam', 'ppeAdmin', 'MasterAdmin', 'GM/MD']}>
+              <Dashboard />
+            </ProtectedRoute>
+          } />
           <Route path="master/unit-rates"   element={<UnitRates />} />
           <Route path="master/team-rates"   element={<TeamRates />} />
           <Route path="rfq"                 element={<RFQ />} />
@@ -80,14 +104,14 @@ function AppRoutes() {
 
           {/* ── Admin only ── */}
           <Route path="admin" element={
-            <ProtectedRoute requireApproved requireRoles={['ppeAdmin']}>
+            <ProtectedRoute requireApproved requireRoles={['ppeAdmin', 'MasterAdmin']}>
               <AdminPanel />
             </ProtectedRoute>
           } />
         </Route>
 
         {/* Fallback */}
-        <Route path="*" element={<Navigate to="/dashboard" replace />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Suspense>
   )

@@ -1,10 +1,13 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useEffect } from 'react'
 import {
   Plus, Eye, Search, CalendarDays, AlertTriangle,
   Coffee, CheckCircle, Pencil, ThumbsUp, RotateCcw,
   MessageSquare, ClipboardList, ListChecks,
 } from 'lucide-react'
 import { useApp } from '../context/AppContext'
+import { useAuth } from '../context/AuthContext'
+import { collection, onSnapshot } from 'firebase/firestore'
+import { db as authDb } from '../firebase/firebaseAuth'
 import Modal from '../components/ui/Modal'
 import StatusBadge from '../components/ui/StatusBadge'
 
@@ -23,50 +26,65 @@ function DRStatusBadge({ status }) {
 
 // ── Submit / Edit Daily Report Form ──────────────────────────────────────────
 
-function DailyReportForm({ workOrder, teamRates, existingReports, editTarget, onSave, onClose }) {
+// ppeTeamUsers: [{ id: uid, name: 'First Last', position: '...' }]
+function DailyReportForm({ workOrder, teamRates, ppeTeamUsers, existingReports, editTarget, onSave, onClose }) {
   const today     = new Date().toISOString().split('T')[0]
   const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0]
-
-  const priorReports = existingReports.filter(d =>
-    editTarget ? d.id !== editTarget.id : true
-  ).sort((a, b) => a.reportDate.localeCompare(b.reportDate))
-
-  const priorCumulSpentMH  = priorReports.reduce((s, d) => s + (d.isLeaveAbsent ? 0 : d.spentMHToday), 0)
-  const priorCumulProgress = priorReports.length > 0 ? priorReports[priorReports.length - 1].cumulativeProgress : 0
 
   // Build activity rows from WO mheRows, filtered to the reporter's assigned items
   const allMheRows = workOrder.mheRows || workOrder.wbsItems || []
 
-  const initActivityRows = (reporterId, existingRows) => {
-    if (!reporterId) {
-      // No reporter selected → show all rows
-      if (existingRows && existingRows.length > 0) return existingRows
-      return allMheRows.map(r => ({
-        id:             r.id || r.activityName || Math.random().toString(36).slice(2),
-        activityName:   r.activityName || r.task || '',
-        totalMH:        r.totalMH || 0,
-        assignEngineer: r.assignEngineer || '',
-        prevProgress:   0,
-        todayProgress:  '',
-        spentMHToday:   '',
-        note:           '',
-      }))
+  // reporters available for this WO: ppeTeamUsers whose UID is in assignedTeam
+  const assignedTeam    = workOrder.assignedTeam || []
+  const reporterOptions = ppeTeamUsers.filter(u => assignedTeam.includes(u.id))
+
+  // Auto-select reporter if editing, or if only one option available
+  const defaultReporter = editTarget?.submittedBy ?? (reporterOptions.length === 1 ? reporterOptions[0].id : '')
+
+  // Get prior reports for a specific reporter (scoped to same WO + same submittedBy)
+  const getPriorReports = (reporterUid) =>
+    existingReports
+      .filter(d => d.submittedBy === reporterUid && (editTarget ? d.id !== editTarget.id : true))
+      .sort((a, b) => a.reportDate.localeCompare(b.reportDate))
+
+  // Get latest prevProgress per activity row from prior reports of this reporter
+  const getActivityPrevProgress = (reporterUid, activityName) => {
+    const prior = getPriorReports(reporterUid)
+    for (let i = prior.length - 1; i >= 0; i--) {
+      const rows = prior[i].activityRows || []
+      const match = rows.find(r => r.activityName === activityName)
+      if (match !== undefined) {
+        return Math.min(
+          (match.prevProgress || 0) + (parseFloat(match.todayProgress) || 0),
+          100
+        )
+      }
     }
-    // Reporter selected → resolve their name and id, match both
-    const reporter     = teamRates.find(t => t.id === reporterId)
-    const reporterName = reporter?.name || ''
-    const myRows = allMheRows.filter(r =>
-      !r.assignEngineer ||                              // unassigned → show to everyone
-      r.assignEngineer === reporterName ||              // match by name (new mheRows)
-      r.assignEngineer === reporterId                   // match by id (old wbsItems)
-    )
+    return 0
+  }
+
+  const initActivityRows = (reporterUid, existingRows) => {
     if (existingRows && existingRows.length > 0) return existingRows
+
+    // Resolve reporter name for matching assignEngineer
+    const userEntry    = ppeTeamUsers.find(u => u.id === reporterUid)
+    const legacyEntry  = teamRates.find(t => t.id === reporterUid)
+    const reporterName = userEntry?.name || legacyEntry?.name || ''
+
+    const myRows = reporterUid
+      ? allMheRows.filter(r =>
+          !r.assignEngineer ||
+          r.assignEngineer === reporterName ||
+          r.assignEngineer === reporterUid
+        )
+      : allMheRows
+
     return myRows.map(r => ({
       id:            r.id || r.activityName || Math.random().toString(36).slice(2),
       activityName:  r.activityName || r.task || '',
       totalMH:       r.totalMH || 0,
       assignEngineer:r.assignEngineer || '',
-      prevProgress:  0,
+      prevProgress:  reporterUid ? getActivityPrevProgress(reporterUid, r.activityName || r.task || '') : 0,
       todayProgress: '',
       spentMHToday:  '',
       note:          '',
@@ -75,12 +93,12 @@ function DailyReportForm({ workOrder, teamRates, existingReports, editTarget, on
 
   const [form, setForm] = useState({
     reportDate:    editTarget?.reportDate    ?? today,
-    submittedBy:   editTarget?.submittedBy   ?? '',
+    submittedBy:   defaultReporter,
     isLeaveAbsent: editTarget?.isLeaveAbsent ?? false,
     notes:         editTarget?.notes         ?? '',
   })
   const [actRows, setActRows] = useState(() =>
-    initActivityRows(editTarget?.submittedBy ?? '', editTarget?.activityRows ?? null)
+    initActivityRows(defaultReporter, editTarget?.activityRows ?? null)
   )
   const [errors, setErrors] = useState({})
 
@@ -89,6 +107,11 @@ function DailyReportForm({ workOrder, teamRates, existingReports, editTarget, on
     setForm(p => ({ ...p, submittedBy: id }))
     setActRows(initActivityRows(id, null))
   }
+
+  // Prior cumulative totals scoped to THIS reporter only
+  const priorReports      = getPriorReports(form.submittedBy)
+  const priorCumulSpentMH = priorReports.reduce((s, d) => s + (d.isLeaveAbsent ? 0 : d.spentMHToday), 0)
+  const priorCumulProgress= priorReports.length > 0 ? priorReports[priorReports.length - 1].cumulativeProgress : 0
 
   // Aggregate totals from activity rows
   const totalSpentToday   = form.isLeaveAbsent ? 0 : actRows.reduce((s, r) => s + (parseFloat(r.spentMHToday) || 0), 0)
@@ -164,8 +187,9 @@ function DailyReportForm({ workOrder, teamRates, existingReports, editTarget, on
           <select value={form.submittedBy} onChange={e => handleReporterChange(e.target.value)}
             className={`w-full px-3 py-2 text-sm border rounded-lg outline-none focus:border-blue-500 bg-white ${errors.submittedBy ? 'border-red-400' : 'border-slate-300'}`}>
             <option value="">— Select —</option>
-            {teamRates.filter(t => (workOrder.assignedTeam || []).includes(t.id))
-              .map(t => <option key={t.id} value={t.id}>{t.name} ({t.position})</option>)}
+            {reporterOptions.map(u => (
+              <option key={u.id} value={u.id}>{u.name}{u.position ? ` (${u.position})` : ''}</option>
+            ))}
           </select>
           {errors.submittedBy && <p className="text-xs text-red-500 mt-1">{errors.submittedBy}</p>}
         </div>
@@ -303,8 +327,12 @@ function DailyReportForm({ workOrder, teamRates, existingReports, editTarget, on
 
 // ── Detail view ───────────────────────────────────────────────────────────────
 
-function DRDetailModal({ dr, teamRates, workOrder, onClose }) {
-  const reporter = teamRates.find(t => t.id === dr.submittedBy)
+function DRDetailModal({ dr, teamRates, ppeTeamUsers, workOrder, onClose }) {
+  const resolveReporter = (id) => {
+    const user = (ppeTeamUsers || []).find(u => u.id === id)
+    if (user) return user.name
+    return teamRates.find(t => t.id === id)?.name || id
+  }
   const actRows  = dr.activityRows || []
 
   return (
@@ -318,7 +346,7 @@ function DRDetailModal({ dr, teamRates, workOrder, onClose }) {
         </div>
         <div className="flex flex-col items-end gap-1">
           <DRStatusBadge status={dr.isLeaveAbsent ? 'Leave' : (dr.drStatus || 'Submitted')} />
-          <p className="text-xs text-slate-500">{reporter?.name || dr.submittedBy}</p>
+          <p className="text-xs text-slate-500">{resolveReporter(dr.submittedBy)}</p>
         </div>
       </div>
 
@@ -416,10 +444,14 @@ function DRDetailModal({ dr, teamRates, workOrder, onClose }) {
 
 // ── ppeLead Review Modal ──────────────────────────────────────────────────────
 
-function ReviewModal({ dr, teamRates, workOrder, onReview, onClose }) {
+function ReviewModal({ dr, teamRates, ppeTeamUsers, workOrder, onReview, onClose }) {
   const [note, setNote]     = useState(dr.reviewNote || '')
   const [action, setAction] = useState(null) // 'accept' | 'reject'
-  const reporter = teamRates.find(t => t.id === dr.submittedBy)
+  const resolveReporter = (id) => {
+    const user = (ppeTeamUsers || []).find(u => u.id === id)
+    if (user) return user.name
+    return teamRates.find(t => t.id === id)?.name || id
+  }
   const actRows  = dr.activityRows || []
 
   const handleSubmit = () => {
@@ -437,7 +469,7 @@ function ReviewModal({ dr, teamRates, workOrder, onReview, onClose }) {
         <div>
           <p className="text-xs text-slate-400">Work No.</p>
           <p className="font-bold text-[#0f2035]">{dr.requestWorkNo}</p>
-          <p className="text-xs text-slate-500">{dr.reportDate} — {reporter?.name || dr.submittedBy}</p>
+          <p className="text-xs text-slate-500">{dr.reportDate} — {resolveReporter(dr.submittedBy)}</p>
         </div>
         <DRStatusBadge status={dr.drStatus || 'Submitted'} />
       </div>
@@ -539,21 +571,73 @@ function ReviewModal({ dr, teamRates, workOrder, onReview, onClose }) {
 // ── Main Daily Report Page ────────────────────────────────────────────────────
 
 export default function DailyReport() {
-  const { workOrders, dailyReports, addDailyReport, updateDailyReport, teamRates, currentRole } = useApp()
+  const { workOrders, dailyReports, addDailyReport, updateDailyReport, teamRates, userHasRole, userRoles } = useApp()
+  const { firebaseUser, userProfile: authProfile } = useAuth()
 
   const [activeTab, setActiveTab]     = useState('reports') // 'reports' | 'logsheet'
   const [search, setSearch]           = useState('')
   const [filterWO, setFilterWO]       = useState('All')
   const [activeModal, setActiveModal] = useState(null)
+  const [ppeTeamUsers, setPpeTeamUsers] = useState([]) // { id: uid, name, position }
 
-  const canSubmit  = ['ppeTeam', 'ppeLead', 'ppeManager', 'ppeAdmin', 'MasterAdmin'].includes(currentRole)
-  const canReview  = ['ppeLead', 'ppeManager', 'ppeAdmin', 'MasterAdmin'].includes(currentRole)
-  const canLogSheet= ['ppeLead', 'ppeManager', 'ppeAdmin', 'MasterAdmin', 'GM/MD'].includes(currentRole)
+  // Load approved ppeTeam users from Firestore (real-time)
+  useEffect(() => {
+    const ref = collection(authDb, 'PPE System', 'root', 'users')
+    const unsub = onSnapshot(ref, snap => {
+      const users = snap.docs.map(d => d.data())
+      setPpeTeamUsers(
+        users
+          .filter(u => u.status === 'approved' && Array.isArray(u.role) && u.role.includes('ppeTeam'))
+          .map(u => ({ id: u.uid, name: `${u.firstName} ${u.lastName}`.trim(), position: u.position || '' }))
+          .sort((a, b) => a.name.localeCompare(b.name))
+      )
+    })
+    return unsub
+  }, [])
 
-  const ongoingWOs = workOrders.filter(w => w.status === 'Ongoing')
+  const canSubmit  = userHasRole(['ppeTeam', 'ppeLead', 'ppeManager', 'ppeAdmin', 'MasterAdmin'])
+  const canReview  = userHasRole(['ppeLead', 'ppeManager', 'ppeAdmin', 'MasterAdmin'])
+  const canLogSheet= userHasRole(['ppeLead', 'ppeManager', 'ppeAdmin', 'MasterAdmin', 'GM/MD'])
+
+  // ppeTeam-only: see only own reports
+  const isPpeTeamOnly = userRoles.length > 0 && userRoles.every(r => r === 'ppeTeam')
+  const myUid         = firebaseUser?.uid ?? ''
+  const myFullName    = authProfile
+    ? `${authProfile.firstName} ${authProfile.lastName}`.trim()
+    : ''
+
+  // Resolve reporter display name: check ppeTeamUsers first, then teamRates (legacy)
+  const getReporterName = (submittedBy) => {
+    if (!submittedBy) return '—'
+    const user = ppeTeamUsers.find(u => u.id === submittedBy)
+    if (user) return user.name
+    const legacy = teamRates.find(t => t.id === submittedBy)
+    return legacy?.name || submittedBy
+  }
+
+  // For ppeTeam: only show reports where submittedBy matches their UID or name (legacy)
+  const visibleReports = useMemo(() => {
+    if (!isPpeTeamOnly) return dailyReports
+    return dailyReports.filter(dr => {
+      if (myUid && dr.submittedBy === myUid) return true
+      // Legacy fallback: submittedBy was teamRates ID, match by name
+      const legacy = teamRates.find(t => t.id === dr.submittedBy)
+      return legacy?.name === myFullName
+    })
+  }, [dailyReports, isPpeTeamOnly, myUid, myFullName, teamRates])
+
+  // ppeTeam only sees Ongoing WOs they are assigned to
+  const ongoingWOs = workOrders.filter(w => {
+    if (w.status !== 'Ongoing') return false
+    if (!isPpeTeamOnly) return true
+    const rows = w.mheRows || w.wbsItems || []
+    const assignedByName = rows.some(r => r.assignEngineer && r.assignEngineer === myFullName)
+    const assignedByUid  = myUid && Array.isArray(w.assignedTeam) && w.assignedTeam.includes(myUid)
+    return assignedByName || assignedByUid
+  })
 
   const displayed = useMemo(() => {
-    let list = [...dailyReports]
+    let list = [...visibleReports]
     if (filterWO !== 'All') list = list.filter(d => d.workOrderId === filterWO)
     if (search.trim()) {
       const q = search.toLowerCase()
@@ -563,18 +647,18 @@ export default function DailyReport() {
       )
     }
     return list.sort((a, b) => b.reportDate.localeCompare(a.reportDate))
-  }, [dailyReports, search, filterWO])
+  }, [visibleReports, search, filterWO])
 
   // Log sheet rows: flatten activityRows per DR
   const logSheetRows = useMemo(() => {
     const rows = []
-    dailyReports
+    visibleReports
       .sort((a, b) => b.reportDate.localeCompare(a.reportDate))
       .forEach(dr => {
-        const reporter = teamRates.find(t => t.id === dr.submittedBy)
+        const reporterName = getReporterName(dr.submittedBy)
         if (dr.isLeaveAbsent) {
           rows.push({
-            date: dr.reportDate, reporter: reporter?.name || dr.submittedBy,
+            date: dr.reportDate, reporter: reporterName,
             rqwNo: dr.requestWorkNo, activityName: '— Leave / Absent —',
             spentMH: 0, balanceMH: dr.balanceMH,
             todayProgress: 0, prevProgress: 0, progressUpto: 0,
@@ -584,7 +668,7 @@ export default function DailyReport() {
           const actRows = dr.activityRows || []
           if (actRows.length === 0) {
             rows.push({
-              date: dr.reportDate, reporter: reporter?.name || dr.submittedBy,
+              date: dr.reportDate, reporter: reporterName,
               rqwNo: dr.requestWorkNo, activityName: '—',
               spentMH: dr.spentMHToday, balanceMH: dr.balanceMH,
               todayProgress: dr.progressToday, prevProgress: 0,
@@ -594,7 +678,7 @@ export default function DailyReport() {
             actRows.forEach(row => {
               const upto = Math.min((row.prevProgress||0)+(parseFloat(row.todayProgress)||0),100)
               rows.push({
-                date: dr.reportDate, reporter: reporter?.name || dr.submittedBy,
+                date: dr.reportDate, reporter: reporterName,
                 rqwNo: dr.requestWorkNo, activityName: row.activityName,
                 spentMH: parseFloat(row.spentMHToday)||0, balanceMH: dr.balanceMH,
                 todayProgress: parseFloat(row.todayProgress)||0,
@@ -606,18 +690,17 @@ export default function DailyReport() {
         }
       })
     return rows
-  }, [dailyReports, teamRates])
+  }, [visibleReports, ppeTeamUsers, teamRates])
 
   const openModal = (type, data = null) => setActiveModal({ type, data })
   const closeModal = () => setActiveModal(null)
 
-  const totalReports  = dailyReports.length
-  const leaveReports  = dailyReports.filter(d => d.isLeaveAbsent).length
-  const totalSpentMH  = dailyReports.filter(d => !d.isLeaveAbsent).reduce((s, d) => s + d.spentMHToday, 0)
-  const pendingReview = dailyReports.filter(d => ['Submitted','Resubmitted'].includes(d.drStatus)).length
+  const totalReports  = visibleReports.length
+  const leaveReports  = visibleReports.filter(d => d.isLeaveAbsent).length
+  const totalSpentMH  = visibleReports.filter(d => !d.isLeaveAbsent).reduce((s, d) => s + d.spentMHToday, 0)
+  const pendingReview = visibleReports.filter(d => ['Submitted','Resubmitted'].includes(d.drStatus)).length
 
   const getWorkOrder  = (woId) => workOrders.find(w => w.id === woId)
-  const getDrReporter = (dr)   => teamRates.find(t => t.id === dr.submittedBy)
 
   return (
     <div className="space-y-4">
@@ -722,7 +805,7 @@ export default function DailyReport() {
                   {displayed.length === 0 ? (
                     <tr><td colSpan={9} className="px-4 py-10 text-center text-slate-400 text-sm">No daily reports found.</td></tr>
                   ) : displayed.map(dr => {
-                    const reporter = getDrReporter(dr)
+                    const reporterName = getReporterName(dr.submittedBy)
                     const drSt = dr.isLeaveAbsent ? 'Leave' : (dr.drStatus || 'Submitted')
                     const needsReview = ['Submitted','Resubmitted'].includes(drSt)
                     return (
@@ -734,9 +817,9 @@ export default function DailyReport() {
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2">
                             <div className="w-6 h-6 rounded-full bg-[#0f2035] text-white flex items-center justify-center text-[9px] font-bold flex-shrink-0">
-                              {reporter?.name?.split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase()||'?'}
+                              {reporterName.split(' ').map(n=>n[0]).join('').slice(0,2).toUpperCase()||'?'}
                             </div>
-                            <span className="text-xs text-slate-700">{reporter?.name || dr.submittedBy}</span>
+                            <span className="text-xs text-slate-700">{reporterName}</span>
                           </div>
                         </td>
                         <td className="px-4 py-3 text-right tabular-nums text-slate-600">{dr.isLeaveAbsent ? '—' : `${dr.progressToday}%`}</td>
@@ -829,7 +912,7 @@ export default function DailyReport() {
       <Modal isOpen={activeModal?.type === 'form'} onClose={closeModal}
         title={`Daily Report — ${activeModal?.data?.wo?.requestWorkNo || ''}`} size="xl">
         {activeModal?.data?.wo && (
-          <DailyReportForm workOrder={activeModal.data.wo} teamRates={teamRates}
+          <DailyReportForm workOrder={activeModal.data.wo} teamRates={teamRates} ppeTeamUsers={ppeTeamUsers}
             existingReports={dailyReports.filter(d => d.workOrderId === activeModal.data.wo.id)}
             editTarget={null} onClose={closeModal}
             onSave={data => { addDailyReport(data); closeModal() }} />
@@ -841,7 +924,7 @@ export default function DailyReport() {
         {activeModal?.data && (() => {
           const wo = getWorkOrder(activeModal.data.workOrderId)
           return wo ? (
-            <DailyReportForm workOrder={wo} teamRates={teamRates}
+            <DailyReportForm workOrder={wo} teamRates={teamRates} ppeTeamUsers={ppeTeamUsers}
               existingReports={dailyReports.filter(d => d.workOrderId === wo.id)}
               editTarget={activeModal.data} onClose={closeModal}
               onSave={data => { updateDailyReport(activeModal.data.id, { ...data, drStatus: 'Resubmitted' }); closeModal() }} />
@@ -852,7 +935,7 @@ export default function DailyReport() {
       <Modal isOpen={activeModal?.type === 'review'} onClose={closeModal}
         title={`Review Report — ${activeModal?.data?.requestWorkNo || ''} / ${activeModal?.data?.reportDate || ''}`} size="xl">
         {activeModal?.data && (
-          <ReviewModal dr={activeModal.data} teamRates={teamRates}
+          <ReviewModal dr={activeModal.data} teamRates={teamRates} ppeTeamUsers={ppeTeamUsers}
             workOrder={getWorkOrder(activeModal.data.workOrderId)}
             onClose={closeModal}
             onReview={data => { updateDailyReport(activeModal.data.id, data); closeModal() }} />
@@ -862,7 +945,7 @@ export default function DailyReport() {
       <Modal isOpen={activeModal?.type === 'detail'} onClose={closeModal}
         title={`Daily Report Detail — ${activeModal?.data?.reportDate || ''}`} size="xl">
         {activeModal?.data && (
-          <DRDetailModal dr={activeModal.data} teamRates={teamRates}
+          <DRDetailModal dr={activeModal.data} teamRates={teamRates} ppeTeamUsers={ppeTeamUsers}
             workOrder={getWorkOrder(activeModal.data.workOrderId)} onClose={closeModal} />
         )}
       </Modal>

@@ -13,9 +13,9 @@ import {
   Shield,
   LogOut,
 } from 'lucide-react'
-import { useApp } from '../../context/AppContext'
 import { useAuth } from '../../context/AuthContext'
 import { logout } from '../../firebase/authService'
+import UserAvatar from '../ui/UserAvatar'
 
 const NAV_ITEMS = [
   {
@@ -23,13 +23,13 @@ const NAV_ITEMS = [
     label: 'Executive Dashboard',
     icon: LayoutDashboard,
     path: '/dashboard',
-    roles: null,
+    roles: ['ppeLead', 'ppeManager', 'ppeTeam', 'ppeAdmin', 'MasterAdmin', 'GM/MD'],
   },
   {
     id: 'master',
     label: 'Master Data',
     icon: Database,
-    roles: ['ppeLead', 'ppeManager', 'ppeAdmin', 'ppeTeam'],
+    roles: ['ppeLead', 'ppeManager', 'ppeAdmin', 'ppeTeam', 'MasterAdmin'],
     children: [
       {
         id: 'unit-rates',
@@ -41,7 +41,7 @@ const NAV_ITEMS = [
         id: 'team-rates',
         label: 'Team Hourly Rate',
         path: '/master/team-rates',
-        roles: ['ppeLead', 'ppeManager', 'ppeAdmin'],
+        roles: ['ppeLead', 'ppeManager', 'ppeAdmin', 'MasterAdmin'],
       },
     ],
   },
@@ -57,33 +57,32 @@ const NAV_ITEMS = [
     label: 'Work Execution',
     icon: ClipboardList,
     path: '/work-orders',
-    roles: ['ppeLead', 'ppeManager', 'ppeAdmin', 'ppeTeam'],
+    roles: ['ppeLead', 'ppeManager', 'ppeAdmin', 'ppeTeam', 'MasterAdmin'],
   },
   {
     id: 'daily-report',
     label: 'Daily Report',
     icon: BookOpen,
     path: '/daily-report',
-    roles: ['ppeLead', 'ppeManager', 'ppeAdmin', 'ppeTeam'],
+    roles: ['ppeLead', 'ppeManager', 'ppeAdmin', 'ppeTeam', 'MasterAdmin'],
   },
   {
     id: 'report-summary',
     label: 'Report Summary',
     icon: BarChart3,
     path: '/report-summary',
-    roles: ['ppeLead', 'ppeManager', 'ppeAdmin'],
+    roles: ['ppeLead', 'ppeManager', 'ppeAdmin', 'MasterAdmin'],
   },
   {
     id: 'admin',
     label: 'Admin Panel',
     icon: Shield,
     path: '/admin',
-    roles: ['ppeAdmin'],
+    roles: ['ppeAdmin', 'MasterAdmin'],
   },
 ]
 
 export default function Sidebar() {
-  const { currentRole } = useApp()
   const { userProfile } = useAuth()
   const navigate = useNavigate()
   const [openGroups, setOpenGroups] = useState({ master: true })
@@ -92,8 +91,8 @@ export default function Sidebar() {
     setOpenGroups(prev => ({ ...prev, [id]: !prev[id] }))
   }
 
-  // Use real auth roles when available, fall back to role simulator
-  const userRoles = userProfile?.role ?? [currentRole]
+  // Union of all user roles
+  const userRoles = userProfile?.role ?? []
   const isVisible = (roles) => {
     if (!roles) return true
     return roles.some(r => userRoles.includes(r))
@@ -107,7 +106,7 @@ export default function Sidebar() {
   return (
     <aside className="w-64 min-h-screen bg-[#0f2035] flex flex-col flex-shrink-0">
       {/* Brand */}
-      <div className="flex items-center gap-3 px-5 py-5 border-b border-white/10">
+      <div className="flex items-center gap-3 px-5 py-4 border-b border-white/10">
         <div className="w-9 h-9 rounded-lg bg-blue-500 flex items-center justify-center flex-shrink-0">
           <HardHat size={20} className="text-white" />
         </div>
@@ -117,8 +116,44 @@ export default function Sidebar() {
         </div>
       </div>
 
+      {/* User Profile Card */}
+      {userProfile && (
+        <div className="mx-3 mt-3 mb-1 bg-white/8 border border-white/15 rounded-xl p-3">
+          <div className="flex items-center gap-3">
+            <UserAvatar
+              photoURL={userProfile.photoURL}
+              name={`${userProfile.firstName} ${userProfile.lastName}`}
+              size={44}
+              textSize="text-base"
+              className="border-2 border-blue-400/50 shadow"
+            />
+            <div className="min-w-0 flex-1">
+              <p className="text-white text-sm font-semibold truncate font-sarabun leading-tight">
+                {userProfile.firstName} {userProfile.lastName}
+              </p>
+              <p className="text-blue-200/70 text-[10px] truncate font-sarabun mt-0.5">
+                {userProfile.position || userProfile.email}
+              </p>
+              {/* Roles badges */}
+              <div className="flex flex-wrap gap-1 mt-1.5">
+                {(userProfile.role ?? []).slice(0, 3).map(r => (
+                  <span key={r} className="inline-block bg-blue-500/30 text-blue-200 text-[9px] font-bold px-1.5 py-0.5 rounded-full border border-blue-400/30">
+                    {r}
+                  </span>
+                ))}
+                {(userProfile.role ?? []).length > 3 && (
+                  <span className="inline-block bg-white/10 text-slate-300 text-[9px] font-bold px-1.5 py-0.5 rounded-full">
+                    +{(userProfile.role ?? []).length - 3}
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Navigation */}
-      <nav className="flex-1 py-4 overflow-y-auto scrollbar-thin">
+      <nav className="flex-1 py-3 overflow-y-auto scrollbar-thin">
         {NAV_ITEMS.map(item => {
           if (!isVisible(item.roles)) return null
 
@@ -183,29 +218,13 @@ export default function Sidebar() {
         })}
       </nav>
 
-      {/* User footer */}
-      <div className="px-4 py-3 border-t border-white/10">
-        {userProfile ? (
-          <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-full bg-blue-500 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
-              {userProfile.firstName?.[0]?.toUpperCase() ?? userProfile.email[0].toUpperCase()}
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-white text-xs font-semibold truncate font-sarabun">
-                {userProfile.firstName} {userProfile.lastName}
-              </p>
-              <p className="text-slate-400 text-[10px] truncate">
-                {(userProfile.role ?? []).slice(0, 2).join(', ')}
-              </p>
-            </div>
-            <button onClick={handleLogout} title="ออกจากระบบ"
-              className="p-1.5 text-slate-400 hover:text-white hover:bg-white/10 rounded-lg transition-colors flex-shrink-0">
-              <LogOut size={14} />
-            </button>
-          </div>
-        ) : (
-          <p className="text-slate-500 text-xs text-center">v1.0.0 © 2024 PPE Eng.</p>
-        )}
+      {/* Logout footer */}
+      <div className="px-3 py-3 border-t border-white/10">
+        <button onClick={handleLogout}
+          className="w-full flex items-center gap-3 px-4 py-2.5 text-slate-400 hover:text-white hover:bg-white/5 rounded-lg transition-colors text-sm font-medium">
+          <LogOut size={16} />
+          ออกจากระบบ
+        </button>
       </div>
     </aside>
   )

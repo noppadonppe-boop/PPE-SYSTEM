@@ -30,9 +30,9 @@ function formatIDR(value) {
 }
 
 export default function TeamRates() {
-  const { teamRates, addTeamRate, updateTeamRate, deleteTeamRate, currentRole } = useApp()
+  const { teamRates, addTeamRate, updateTeamRate, deleteTeamRate, userHasRole } = useApp()
 
-  const hasAccess = ALLOWED_ROLES.includes(currentRole)
+  const hasAccess = userHasRole(ALLOWED_ROLES)
 
   const [search, setSearch]         = useState('')
   const [filterPos, setFilterPos]   = useState('All')

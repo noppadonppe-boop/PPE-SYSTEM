@@ -17,33 +17,26 @@ import type { UserProfile, ActivityLog } from '../types/auth'
 // ─── Constants ────────────────────────────────────────────────────────────────
 const APP_NAME       = 'PPE System'
 const ROOT_DOC       = 'root'
-const SESSION_KEY    = 'ppe_session_expires'
-const SESSION_MS     = 60 * 60 * 1000 // 1 hour
 
 const userDocRef  = (uid: string) => doc(db, APP_NAME, ROOT_DOC, 'users', uid)
 const metaDocRef  = ()            => doc(db, APP_NAME, ROOT_DOC, 'appMeta', 'config')
 const logColRef   = ()            => collection(db, APP_NAME, ROOT_DOC, 'activityLogs')
 
-// ─── Session helpers ──────────────────────────────────────────────────────────
+// ─── Session helpers (no expiry — session persists until explicit logout) ─────
 export function setSessionExpiry(): void {
-  localStorage.setItem(SESSION_KEY, String(Date.now() + SESSION_MS))
+  // No-op: session no longer expires automatically
 }
 
 export function isSessionExpired(): boolean {
-  const exp = localStorage.getItem(SESSION_KEY)
-  if (!exp) return true
-  return Date.now() > Number(exp)
+  return false // Session never expires; logout is manual only
 }
 
 export function clearSession(): void {
-  localStorage.removeItem(SESSION_KEY)
+  // No-op: nothing to clear
 }
 
 export function getRemainingMinutes(): number {
-  const exp = localStorage.getItem(SESSION_KEY)
-  if (!exp) return 0
-  const ms = Number(exp) - Date.now()
-  return ms <= 0 ? 0 : Math.ceil(ms / 60000)
+  return Infinity // Session has no time limit
 }
 
 // ─── Activity log (non-blocking) ─────────────────────────────────────────────
@@ -100,6 +93,24 @@ async function createUserProfile(
   return profile
 }
 
+// ─── Update profile photo and name on each login ─────────────────────────────
+async function syncProfileOnLogin(
+  uid: string,
+  updates: { photoURL?: string | null; firstName?: string; lastName?: string }
+): Promise<void> {
+  try {
+    const patch: Record<string, unknown> = {}
+    if (updates.photoURL !== undefined) patch.photoURL = updates.photoURL ?? ''
+    if (updates.firstName) patch.firstName = updates.firstName
+    if (updates.lastName !== undefined) patch.lastName = updates.lastName
+    if (Object.keys(patch).length > 0) {
+      await updateDoc(userDocRef(uid), patch)
+    }
+  } catch {
+    // non-blocking
+  }
+}
+
 // ─── Login with Email/Password ────────────────────────────────────────────────
 export async function loginWithEmail(email: string, password: string): Promise<UserProfile> {
   // CRITICAL: set session expiry IMMEDIATELY before any awaits
@@ -109,8 +120,11 @@ export async function loginWithEmail(email: string, password: string): Promise<U
   const profile = await fetchUserProfile(cred.user.uid)
   if (!profile) throw new Error('profile-not-found')
 
+  // Sync photoURL from Firebase Auth on every login
+  await syncProfileOnLogin(cred.user.uid, { photoURL: cred.user.photoURL })
+
   logActivity({ uid: cred.user.uid, email, action: 'LOGIN' })
-  return profile
+  return { ...profile, photoURL: cred.user.photoURL ?? profile.photoURL }
 }
 
 // ─── Login with Google ────────────────────────────────────────────────────────
@@ -131,6 +145,16 @@ export async function loginWithGoogle(): Promise<UserProfile> {
     })
     logActivity({ uid: cred.user.uid, email: cred.user.email ?? '', action: 'REGISTER', meta: { method: 'google' } })
   } else {
+    // Sync latest name + photo from Google on every login
+    const nameParts = (cred.user.displayName ?? '').split(' ')
+    const firstName = nameParts[0] || profile.firstName
+    const lastName  = nameParts.slice(1).join(' ') || profile.lastName
+    await syncProfileOnLogin(cred.user.uid, {
+      photoURL: cred.user.photoURL,
+      firstName,
+      lastName,
+    })
+    profile = { ...profile, photoURL: cred.user.photoURL ?? profile.photoURL, firstName, lastName }
     logActivity({ uid: cred.user.uid, email: cred.user.email ?? '', action: 'LOGIN', meta: { method: 'google' } })
   }
 
@@ -179,4 +203,19 @@ export async function updateUserPosition(
   position: string
 ): Promise<void> {
   await updateDoc(userDocRef(targetUid), { position })
+}
+
+// ─── Self: update own profile (name, position, photoURL) ─────────────────────
+export async function updateOwnProfile(
+  uid: string,
+  data: { firstName?: string; lastName?: string; position?: string; photoURL?: string }
+): Promise<void> {
+  const patch: Record<string, unknown> = {}
+  if (data.firstName  !== undefined) patch.firstName  = data.firstName
+  if (data.lastName   !== undefined) patch.lastName   = data.lastName
+  if (data.position   !== undefined) patch.position   = data.position
+  if (data.photoURL   !== undefined) patch.photoURL   = data.photoURL
+  if (Object.keys(patch).length > 0) {
+    await updateDoc(userDocRef(uid), patch)
+  }
 }

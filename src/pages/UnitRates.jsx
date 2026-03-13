@@ -16,9 +16,9 @@ const DIFFICULTY_OPTIONS = [
 const EMPTY_FORM = { category: 'Mechanical', task: '', unit: '', min: '', max: '', avg: '', difficultyFactor: '', adjustUnitMH: '' }
 
 export default function UnitRates() {
-  const { unitRates, addUnitRate, updateUnitRate, deleteUnitRate, currentRole } = useApp()
+  const { unitRates, addUnitRate, updateUnitRate, deleteUnitRate, userHasRole } = useApp()
 
-  const canEdit = ['ppeLead', 'ppeManager', 'ppeAdmin', 'MasterAdmin', 'GM/MD'].includes(currentRole)
+  const canEdit = userHasRole(['ppeLead', 'ppeManager', 'ppeAdmin', 'MasterAdmin', 'GM/MD'])
 
   // ── Excel state ──────────────────────────────────────────────────────────
   const importRef = useRef(null)

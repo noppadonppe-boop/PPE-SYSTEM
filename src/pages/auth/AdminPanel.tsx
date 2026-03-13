@@ -8,6 +8,7 @@ import {
   Shield, CheckCircle, XCircle, Clock, Users,
   ChevronDown, Search, RefreshCw,
 } from 'lucide-react'
+import UserAvatar from '../../components/ui/UserAvatar'
 
 const APP_NAME = 'PPE System'
 const ROOT_DOC = 'root'
@@ -224,9 +225,12 @@ function UserRow({
       {/* User info */}
       <td className="px-4 py-3">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-full bg-[#0f2035] text-white flex items-center justify-center text-xs font-bold flex-shrink-0">
-            {user.firstName?.[0]?.toUpperCase() ?? user.email[0].toUpperCase()}
-          </div>
+          <UserAvatar
+            photoURL={user.photoURL}
+            name={`${user.firstName} ${user.lastName}`}
+            size={32}
+            textSize="text-xs"
+          />
           <div>
             <p className="text-sm font-semibold text-slate-800 font-sarabun">
               {user.firstName} {user.lastName}
