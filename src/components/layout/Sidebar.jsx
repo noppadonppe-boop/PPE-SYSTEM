@@ -40,10 +40,16 @@ const NAV_ITEMS = [
         roles: null,
       },
       {
+        id: 'eng-standard-rate',
+        label: 'Eng Standard Rate',
+        path: '/master/eng-standard-rate',
+        roles: null,
+      },
+      {
         id: 'team-rates',
         label: 'Team Hourly Rate',
         path: '/master/team-rates',
-        roles: ['ppeLead', 'ppeManager', 'ppeAdmin', 'MasterAdmin'],
+        roles: ['ppeManager', 'ppeAdmin', 'MasterAdmin'],
       },
     ],
   },

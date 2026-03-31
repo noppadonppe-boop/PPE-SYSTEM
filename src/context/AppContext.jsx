@@ -69,11 +69,12 @@ export function AppProvider({ children }) {
   }, [])
 
   // Live data from Firestore
-  const [unitRates,    setUnitRates]    = useState([])
-  const [teamRates,    setTeamRates]    = useState([])
-  const [rfqs,         setRfqs]         = useState([])
-  const [workOrders,   setWorkOrders]   = useState([])
-  const [dailyReports, setDailyReports] = useState([])
+  const [unitRates,         setUnitRates]         = useState([])
+  const [teamRates,         setTeamRates]         = useState([])
+  const [engStandardRates,  setEngStandardRates]  = useState([])
+  const [rfqs,              setRfqs]              = useState([])
+  const [workOrders,        setWorkOrders]        = useState([])
+  const [dailyReports,      setDailyReports]      = useState([])
 
   // Loading / error state — start as true, resolve after auth + data ready
   const [loading, setLoading] = useState(true)
@@ -88,6 +89,7 @@ export function AppProvider({ children }) {
     if (!firebaseUser) {
       setUnitRates([])
       setTeamRates([])
+      setEngStandardRates([])
       setRfqs([])
       setWorkOrders([])
       setDailyReports([])
@@ -100,7 +102,7 @@ export function AppProvider({ children }) {
     setLoading(true)
     setDbError(null)
     let resolved = 0
-    const total = 5
+    const total = 6
     const markLoaded = () => { resolved++; if (resolved >= total) setLoading(false) }
 
     const snap = (colName, setter) =>
@@ -118,11 +120,12 @@ export function AppProvider({ children }) {
       )
 
     const unsubs = [
-      snap('unitRates',    setUnitRates),
-      snap('teamRates',    setTeamRates),
-      snap('rfqs',         setRfqs),
-      snap('workOrders',   setWorkOrders),
-      snap('dailyReports', setDailyReports),
+      snap('unitRates',        setUnitRates),
+      snap('teamRates',        setTeamRates),
+      snap('engStandardRates', setEngStandardRates),
+      snap('rfqs',             setRfqs),
+      snap('workOrders',       setWorkOrders),
+      snap('dailyReports',     setDailyReports),
     ]
 
     return () => unsubs.forEach(u => u())
@@ -150,6 +153,24 @@ export function AppProvider({ children }) {
   }
   const deleteUnitRate = async (id) => {
     await deleteDoc(subDocRef('unitRates', id))
+  }
+
+  // ── Eng Standard Rate CRUD ─────────────────────────────────────────────
+  const addEngStandardRate = async (data) => {
+    const id = `esr-${Date.now()}`
+    await guardedUpdate(`add-esr-${id}`, async () => {
+      const payload = firestoreSafe({ id, ...data })
+      if (payload) await setDoc(subDocRef('engStandardRates', id), payload)
+    })
+  }
+  const updateEngStandardRate = async (id, data) => {
+    await guardedUpdate(`upd-esr-${id}`, async () => {
+      const payload = safeMerge(data, { editingBy: null, updatedAt: serverTimestamp() })
+      if (payload) await updateDoc(subDocRef('engStandardRates', id), payload)
+    })
+  }
+  const deleteEngStandardRate = async (id) => {
+    await deleteDoc(subDocRef('engStandardRates', id))
   }
 
   // ── Team Rate CRUD ──────────────────────────────────────────────────────
@@ -353,6 +374,7 @@ export function AppProvider({ children }) {
     userRoles,
     userHasRole,
     unitRates, addUnitRate, updateUnitRate, deleteUnitRate,
+    engStandardRates, addEngStandardRate, updateEngStandardRate, deleteEngStandardRate,
     teamRates, addTeamRate, updateTeamRate, deleteTeamRate,
     rfqs, addRfq, updateRfq, deleteRfq,
     workOrders, addWorkOrder, updateWorkOrder, deleteWorkOrder,

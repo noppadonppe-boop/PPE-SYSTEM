@@ -122,6 +122,80 @@ export function parseUnitRatesExcel(file) {
   })
 }
 
+// ─── Eng Standard Rates ───────────────────────────────────────────────────────
+
+export function exportEngStandardRates(engStandardRates) {
+  const rows = engStandardRates.map(r => ({
+    Position: r.position,
+    'Hour Rate (THB)': r.hourRate,
+  }))
+  const ws = XLSX.utils.json_to_sheet(rows)
+  autoFitCols(ws, rows)
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, 'Eng Standard Rates')
+  downloadWorkbook(wb, 'EngStandardRates_Export.xlsx')
+}
+
+export function downloadEngStandardRateTemplate() {
+  const sample = [
+    { Position: 'Project manager',                 'Hour Rate (THB)': 550 },
+    { Position: 'Project engineer/architect',      'Hour Rate (THB)': 530 },
+    { Position: 'Senior civil engineer/architect', 'Hour Rate (THB)': 410 },
+  ]
+  const ws = XLSX.utils.json_to_sheet(sample)
+  autoFitCols(ws, sample)
+
+  const notes = XLSX.utils.aoa_to_sheet([
+    ['Column', 'Required', 'Description'],
+    ['Position', 'Yes', 'Job title / position name (text)'],
+    ['Hour Rate (THB)', 'Yes', 'Standard hourly rate in THB (positive number)'],
+  ])
+  notes['!cols'] = [{ wch: 20 }, { wch: 10 }, { wch: 50 }]
+
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, 'Template')
+  XLSX.utils.book_append_sheet(wb, notes, 'Instructions')
+  downloadWorkbook(wb, 'EngStandardRates_Template.xlsx')
+}
+
+export function parseEngStandardRatesExcel(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      try {
+        const wb = XLSX.read(e.target.result, { type: 'array' })
+        const ws = wb.Sheets[wb.SheetNames[0]]
+        const rows = XLSX.utils.sheet_to_json(ws, { defval: '' })
+
+        const valid = []
+        const errors = []
+
+        rows.forEach((row, i) => {
+          const lineNo  = i + 2
+          const position = String(row['Position'] ?? row['position'] ?? '').trim()
+          const hourRate  = parseFloat(row['Hour Rate (THB)'] ?? row['hourRate'] ?? '')
+
+          const rowErrors = []
+          if (!position)              rowErrors.push('Position missing')
+          if (isNaN(hourRate) || hourRate <= 0) rowErrors.push('Hour Rate invalid (must be > 0)')
+
+          if (rowErrors.length) {
+            errors.push({ row: lineNo, issues: rowErrors })
+          } else {
+            valid.push({ position, hourRate })
+          }
+        })
+
+        resolve({ valid, errors, total: rows.length })
+      } catch (err) {
+        reject(new Error('Failed to parse Excel file: ' + err.message))
+      }
+    }
+    reader.onerror = () => reject(new Error('Failed to read file'))
+    reader.readAsArrayBuffer(file)
+  })
+}
+
 // ─── Team Rates ───────────────────────────────────────────────────────────────
 
 export function exportTeamRates(teamRates) {

@@ -19,6 +19,7 @@ const RFQ          = lazy(() => import('./pages/RFQ'))
 const WorkOrders   = lazy(() => import('./pages/WorkOrders'))
 const DailyReport  = lazy(() => import('./pages/DailyReport'))
 const ReportSummary = lazy(() => import('./pages/ReportSummary'))
+const EngStandardRate = lazy(() => import('./pages/EngStandardRate'))
 
 // Redirect index to /dashboard for PPE roles, /rfq for Requestor-only
 function HomeRedirect() {
@@ -96,6 +97,7 @@ function AppRoutes() {
             </ProtectedRoute>
           } />
           <Route path="master/unit-rates"   element={<UnitRates />} />
+          <Route path="master/eng-standard-rate" element={<EngStandardRate />} />
           <Route path="master/team-rates"   element={<TeamRates />} />
           <Route path="rfq"                 element={<RFQ />} />
           <Route path="work-orders"         element={<WorkOrders />} />

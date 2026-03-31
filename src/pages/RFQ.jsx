@@ -905,10 +905,11 @@ function genMheNo(rfq) {
   return base
 }
 
-const EMPTY_MHE_ROW = { activityName: '', type: 'Drawing', additionalInfo: '', qty: '', unitMH: '', assignEngineer: '', note: '' }
+const DIFF_LEVELS = ['Min(Easy)', 'Max(Hard)', 'AVG(Normal)']
+const EMPTY_MHE_ROW = { activityName: '', category: '', task: '', difficultyLevel: 'AVG(Normal)', additionalInfo: '', qty: '', unitMH: '', totalMH: 0, assignPosition: '', unitRate: '', totalCost: 0, note: '' }
 
 function Stage2Form({ rfq, onSave, onSaveDraft, onClose }) {
-  const { teamRates, unitRates } = useApp()
+  const { teamRates, unitRates, engStandardRates } = useApp()
   const [showUnitRef, setShowUnitRef] = useState(false)
   const [ppeTeamUsers, setPpeTeamUsers] = useState([])
 
@@ -935,7 +936,39 @@ function Stage2Form({ rfq, onSave, onSaveDraft, onClose }) {
     // Ensure every row has a unique id (old Firestore docs may lack one)
     return src.map((r, i) => r.id ? r : { ...r, id: `mhe-norm-${Date.now()}-${i}` })
   })
-  const [draftSaved, setDraftSaved] = useState(false)
+  const [indirectRows, setIndirectRows] = useState(() => {
+    const src = rfq.indirectCostRows && rfq.indirectCostRows.length > 0
+      ? rfq.indirectCostRows
+      : [{ id: `ind-${Date.now()}`, item: '', description: '', unit: '', rate: '', qty: '', amount: 0, note: '' }]
+    return src.map((r, i) => r.id ? r : { ...r, id: `ind-${Date.now()}-${i}` })
+  })
+  const [indirectEditingId, setIndirectEditingId] = useState(null)
+  const [indirectEditBuf, setIndirectEditBuf] = useState({})
+
+  const startIndirectEdit = (row) => { setIndirectEditingId(row.id); setIndirectEditBuf({ ...row }) }
+  const cancelIndirectEdit = () => { setIndirectEditingId(null); setIndirectEditBuf({}) }
+  const saveIndirectEdit = () => {
+    setIndirectRows(prev => prev.map(r => r.id === indirectEditingId ? { ...indirectEditBuf } : r))
+    setIndirectEditingId(null)
+    setIndirectEditBuf({})
+  }
+  const setIndirectBuf = (field, val) => setIndirectEditBuf(p => ({ ...p, [field]: val }))
+
+  const addIndirectRow = () => setIndirectRows(prev => [...prev, { id: `ind-${Date.now()}`, item: '', description: '', unit: '', rate: '', qty: '', amount: 0, note: '' }])
+  const removeIndirectRow = (id) => setIndirectRows(prev => prev.filter(r => r.id !== id))
+  const updateIndirectRow = (id, field, value) => setIndirectRows(prev => prev.map(r => {
+    if (r.id !== id) return r
+    const updated = { ...r, [field]: value }
+    if (field === 'rate' || field === 'qty') {
+      const rate = parseFloat(field === 'rate' ? value : updated.rate) || 0
+      const qty = parseFloat(field === 'qty' ? value : updated.qty) || 0
+      updated.amount = +(rate * qty).toFixed(2)
+    }
+    return updated
+  }))
+
+  const totalIndirectCost = indirectRows.reduce((s, r) => s + (parseFloat(r.amount) || 0), 0)
+  const [overheadPct, setOverheadPct] = useState(rfq.overheadPct ?? 15)
   const [editingId, setEditingId] = useState(null) // row id currently being edited
   const [editBuf, setEditBuf]     = useState({})    // buffer for edit-in-progress values
   const importRef = useRef()
@@ -946,38 +979,53 @@ function Stage2Form({ rfq, onSave, onSaveDraft, onClose }) {
   }
   const cancelEdit = () => { setEditingId(null); setEditBuf({}) }
   const saveEdit = () => {
-    const q = parseFloat(editBuf.qty)    || 0
-    const u = parseFloat(editBuf.unitMH) || 0
-    setRows(prev => prev.map(r => r.id === editingId
-      ? { ...editBuf, qty: editBuf.qty, unitMH: editBuf.unitMH, totalMH: +(q * u).toFixed(2) }
-      : r
-    ))
+    setRows(prev => prev.map(r => r.id === editingId ? { ...editBuf } : r))
     setEditingId(null)
     setEditBuf({})
   }
-  const setBuf = (field, val) => setEditBuf(p => ({ ...p, [field]: val }))
+  const applyFieldChange = (row, field, value) => {
+    const updated = { ...row, [field]: value }
+    if (field === 'category') { updated.task = ''; updated.unitMH = ''; updated.totalMH = 0 }
+    if ((field === 'task' || field === 'difficultyLevel') && updated.task) {
+      const ur = unitRates.find(r => r.category === updated.category && r.task === updated.task)
+      if (ur) {
+        updated.unitMH = updated.difficultyLevel === 'Min(Easy)' ? (ur.min ?? '')
+          : updated.difficultyLevel === 'Max(Hard)' ? (ur.max ?? '') : (ur.avg ?? '')
+      }
+    }
+    if (['qty', 'unitMH', 'task', 'difficultyLevel'].includes(field)) {
+      const q = parseFloat(updated.qty) || 0
+      const u = parseFloat(updated.unitMH) || 0
+      updated.totalMH = +(q * u).toFixed(2)
+    }
+    if (field === 'assignPosition') {
+      const esr = engStandardRates.find(r => r.position === value)
+      updated.unitRate = esr ? esr.hourRate : ''
+    }
+    updated.totalCost = +(parseFloat(updated.totalMH || 0) * parseFloat(updated.unitRate || 0)).toFixed(2)
+    return updated
+  }
+
+  const setBuf = (field, val) => setEditBuf(p => applyFieldChange(p, field, val))
 
   const addRow = () => setRows(prev => [...prev, { ...EMPTY_MHE_ROW, id: `mhe-${Date.now()}` }])
   const removeRow = (id) => setRows(prev => prev.filter(r => r.id !== id))
-  const updateRow = (id, field, value) => setRows(prev => prev.map(r => {
-    if (r.id !== id) return r
-    const updated = { ...r, [field]: value }
-    if (field === 'qty' || field === 'unitMH') {
-      const q = parseFloat(field === 'qty' ? value : updated.qty) || 0
-      const u = parseFloat(field === 'unitMH' ? value : updated.unitMH) || 0
-      updated.totalMH = +(q * u).toFixed(2)
-    }
-    return updated
-  }))
+  const updateRow = (id, field, value) => setRows(prev => prev.map(r => r.id !== id ? r : applyFieldChange(r, field, value)))
 
   const totalMH = rows.reduce((s, r) => s + (r.totalMH || 0), 0)
-  const engOptions = ppeTeamUsers.map(e => e.name)
+  const totalDirectCost = rows.reduce((s, r) => s + (r.totalCost || 0), 0)
+  const totalAB = totalDirectCost + totalIndirectCost
+  const overheadAmount = +(totalAB * (overheadPct / 100)).toFixed(2)
+  const grandTotal = +(totalAB + overheadAmount).toFixed(2)
+  const categories = [...new Set(unitRates.map(r => r.category).filter(Boolean))].sort()
+  const tasksForCat = (cat) => [...new Set(unitRates.filter(r => r.category === cat).map(r => r.task).filter(Boolean))]
+  const positionOptions = engStandardRates.map(r => r.position)
   const canSubmit = rows.some(r => r.activityName.trim()) && dateCompletion
 
   // ── Excel helpers ────────────────────────────────────────────────────────
   const downloadTemplate = () => {
-    const headers = [['Activity Name','Type','Additional Info','Qty','Unit MH','Assign Engineer','Note']]
-    const sample  = [['Foundation Drawing','Drawing','Level B1',1,10,'','']]
+    const headers = [['Activity Name','Category','Task','Difficulty Level','Additional Info','Qty','Assign Position','Note']]
+    const sample  = [['Foundation Drawing','Civil','Structural Drawing','AVG(Normal)','Level B1',1,'Project Engineer','']]
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([...headers, ...sample]), 'MHE')
     XLSX.writeFile(wb, `MHE-Template-${rfq.requestWorkNo}.xlsx`)
@@ -991,20 +1039,26 @@ function Stage2Form({ rfq, onSave, onSaveDraft, onClose }) {
       const wb   = XLSX.read(ev.target.result, { type: 'binary' })
       const ws   = wb.Sheets[wb.SheetNames[0]]
       const data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
-      // skip header row (row 0)
       const imported = data.slice(1).filter(r => r[0]).map((r, i) => {
-        const q = parseFloat(r[3]) || 0
-        const u = parseFloat(r[4]) || 0
+        const category = String(r[1] || '').trim()
+        const task     = String(r[2] || '').trim()
+        const diffLvl  = DIFF_LEVELS.includes(String(r[3]).trim()) ? String(r[3]).trim() : 'AVG(Normal)'
+        const ur = unitRates.find(u => u.category === category && u.task === task)
+        const unitMH = ur ? (diffLvl === 'Min(Easy)' ? ur.min : diffLvl === 'Max(Hard)' ? ur.max : ur.avg) ?? '' : ''
+        const qty = parseFloat(r[5]) || 0
+        const assignPos = String(r[6] || '').trim()
+        const esr = engStandardRates.find(s => s.position === assignPos)
+        const unitRate = esr ? esr.hourRate : ''
+        const totalMH = +(qty * (parseFloat(unitMH) || 0)).toFixed(2)
+        const totalCost = +(totalMH * (parseFloat(unitRate) || 0)).toFixed(2)
         return {
-          id:             `mhe-imp-${Date.now()}-${i}`,
-          activityName:  String(r[0] || '').trim(),
-          type:          MHE_TYPES.includes(String(r[1]).trim()) ? String(r[1]).trim() : MHE_TYPES[0],
-          additionalInfo:String(r[2] || '').trim(),
-          qty:           q || '',
-          unitMH:        u || '',
-          totalMH:       +(q * u).toFixed(2),
-          assignEngineer:String(r[5] || '').trim(),
-          note:          String(r[6] || '').trim(),
+          id: `mhe-imp-${Date.now()}-${i}`,
+          activityName: String(r[0] || '').trim(),
+          category, task, difficultyLevel: diffLvl,
+          additionalInfo: String(r[4] || '').trim(),
+          qty: qty || '', unitMH, totalMH,
+          assignPosition: assignPos, unitRate, totalCost,
+          note: String(r[7] || '').trim(),
         }
       })
       if (imported.length > 0) setRows(imported)
@@ -1014,25 +1068,59 @@ function Stage2Form({ rfq, onSave, onSaveDraft, onClose }) {
   }
 
   const exportToExcel = () => {
-    const wsData = [
-      ['#','Activity Name','Type','Additional Info','Qty','Unit MH','Total MH','Assign Engineer','Note'],
-      ...rows.map((r, i) => [
-        i + 1, r.activityName, r.type, r.additionalInfo,
-        parseFloat(r.qty)||0, parseFloat(r.unitMH)||0, r.totalMH||0,
-        r.assignEngineer, r.note,
-      ]),
-      ['','','','','','Total MH:', totalMH.toFixed(2),'','']
-    ]
     const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(wsData), 'MHE')
+    // Direct Cost sheet
+    const wsData = [
+      ['#','Activity Name','Category','Task','Difficulty Level','Additional Info','Qty','Unit MH','Total MH','Assign Position','Unit Rate/MH','Total Cost','Note'],
+      ...rows.map((r, i) => [
+        i + 1, r.activityName, r.category||'', r.task||'', r.difficultyLevel||'',
+        r.additionalInfo||'', parseFloat(r.qty)||0, parseFloat(r.unitMH)||0,
+        r.totalMH||0, r.assignPosition||'', parseFloat(r.unitRate)||0, r.totalCost||0, r.note||'',
+      ]),
+      ['','','','','','','','Total MH:', totalMH.toFixed(2),'','Total Cost:', totalDirectCost.toLocaleString(),'']
+    ]
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(wsData), 'Direct Cost')
+    // Indirect Cost sheet
+    const indirectWsData = [
+      ['#','Item','Description','Unit','Rate','Qty','Amount','Note'],
+      ...indirectRows.map((r, i) => [
+        i + 1, r.item||'', r.description||'', r.unit||'', parseFloat(r.rate)||0, parseFloat(r.qty)||0, r.amount||0, r.note||'',
+      ]),
+      ['','','','','','Total Indirect Cost:', totalIndirectCost.toLocaleString(),'']
+    ]
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(indirectWsData), 'Indirect Cost')
+    // Cost Summary sheet
+    const summaryWsData = [
+      ['Description', 'Amount (Bath)'],
+      ['Total Direct Cost', totalDirectCost.toLocaleString()],
+      ['Total Indirect Cost', totalIndirectCost.toLocaleString()],
+      ['Total Direct + Indirect (Table A + Table B)', totalAB.toLocaleString()],
+      [`Overhead + Profit ${overheadPct}%`, overheadAmount.toLocaleString()],
+      ['Grand Total (Cost excluding Vat 7%)', grandTotal.toLocaleString()]
+    ]
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(summaryWsData), 'Cost Summary')
     XLSX.writeFile(wb, `MHE-${mheNo}-${rfq.requestWorkNo}.xlsx`)
   }
 
   const buildPayload = (targetStatus) => ({
     mheNo, dateStart, dateCompletion, mheRows: rows,
-    wbsItems: rows.map(r => ({ id: r.id, task: r.activityName, unit: 'activity', qty: parseFloat(r.qty)||0, unitMH: parseFloat(r.unitMH)||0, totalMH: r.totalMH||0, type: r.type, additionalInfo: r.additionalInfo, assignEngineer: r.assignEngineer, note: r.note })),
-    assignedEngineers: [...new Set(rows.filter(r => r.assignEngineer).map(r => ppeTeamUsers.find(t => t.name === r.assignEngineer)?.id).filter(Boolean))],
+    wbsItems: rows.map(r => ({
+      id: r.id, task: r.activityName, unit: 'activity',
+      category: r.category || '', taskRef: r.task || '',
+      difficultyLevel: r.difficultyLevel || '',
+      qty: parseFloat(r.qty)||0, unitMH: parseFloat(r.unitMH)||0, totalMH: r.totalMH||0,
+      additionalInfo: r.additionalInfo || '',
+      assignPosition: r.assignPosition || '',
+      unitRate: parseFloat(r.unitRate)||0, totalCost: r.totalCost||0,
+      note: r.note || '',
+    })),
+    indirectCostRows: indirectRows,
     totalPlannedMH: +totalMH.toFixed(2),
+    totalDirectCost: +totalDirectCost.toFixed(2),
+    totalIndirectCost: +totalIndirectCost.toFixed(2),
+    overheadPct,
+    overheadAmount,
+    grandTotal,
     status: targetStatus,
   })
 
@@ -1044,9 +1132,13 @@ function Stage2Form({ rfq, onSave, onSaveDraft, onClose }) {
     try {
       // Save ONLY the MHE data — never change the workflow status
       const { mheNo: mn, dateStart: ds, dateCompletion: dc, mheRows: mr,
-              wbsItems: wi, assignedEngineers: ae, totalPlannedMH: tp } = buildPayload(rfq.status)
+              wbsItems: wi, indirectCostRows: icr, totalPlannedMH: tp,
+              totalDirectCost: tdc, totalIndirectCost: tic,
+              overheadPct: op, overheadAmount: oa, grandTotal: gt } = buildPayload(rfq.status)
       await onSaveDraft({ mheNo: mn, dateStart: ds, dateCompletion: dc,
-                          mheRows: mr, wbsItems: wi, assignedEngineers: ae, totalPlannedMH: tp })
+                          mheRows: mr, wbsItems: wi, indirectCostRows: icr,
+                          totalPlannedMH: tp, totalDirectCost: tdc, totalIndirectCost: tic,
+                          overheadPct: op, overheadAmount: oa, grandTotal: gt })
       setDraftSaved(true)
       setTimeout(() => setDraftSaved(false), 2500)
     } finally {
@@ -1078,11 +1170,11 @@ function Stage2Form({ rfq, onSave, onSaveDraft, onClose }) {
         </div>
       </div>
 
-      {/* Manhour Estimate Table */}
+      {/* Direct Cost estimate Table */}
       <div>
         <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
           <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
-            <ClipboardList size={15} /> Manhour Estimate Table
+            <ClipboardList size={15} /> Direct Cost estimate Table
           </h3>
           <div className="flex items-center gap-2">
             {/* Unit Rate Reference */}
@@ -1119,18 +1211,22 @@ function Stage2Form({ rfq, onSave, onSaveDraft, onClose }) {
         </div>
 
         <div className="overflow-x-auto rounded-xl border border-slate-200">
-          <table className="w-full text-xs" style={{ minWidth: 900 }}>
+          <table className="w-full text-xs" style={{ minWidth: 1400 }}>
             <thead className="bg-[#0f2035] text-white">
               <tr>
-                <th className="px-2 py-2.5 text-center font-semibold w-16">#</th>
-                <th className="px-2 py-2.5 text-left font-semibold min-w-[160px]">Activity Name</th>
-                <th className="px-2 py-2.5 text-left font-semibold w-28">Type</th>
-                <th className="px-2 py-2.5 text-left font-semibold min-w-[120px]">Additional Info</th>
-                <th className="px-2 py-2.5 text-right font-semibold w-24">Qty</th>
-                <th className="px-2 py-2.5 text-right font-semibold w-28">Unit MH</th>
-                <th className="px-2 py-2.5 text-right font-semibold w-20">Total MH</th>
-                <th className="px-2 py-2.5 text-left font-semibold w-36">Assign Engineer</th>
-                <th className="px-2 py-2.5 text-left font-semibold min-w-[120px]">Note</th>
+                <th className="px-2 py-2.5 text-center font-semibold w-14">#</th>
+                <th className="px-2 py-2.5 text-left font-semibold min-w-[140px]">Activity Name</th>
+                <th className="px-2 py-2.5 text-left font-semibold w-32">Category</th>
+                <th className="px-2 py-2.5 text-left font-semibold min-w-[140px]">Task</th>
+                <th className="px-2 py-2.5 text-left font-semibold w-28">Difficulty Level</th>
+                <th className="px-2 py-2.5 text-left font-semibold min-w-[100px]">Additional Info</th>
+                <th className="px-2 py-2.5 text-right font-semibold w-16">Qty</th>
+                <th className="px-2 py-2.5 text-right font-semibold w-24">Unit MH</th>
+                <th className="px-2 py-2.5 text-right font-semibold w-22">Total MH</th>
+                <th className="px-2 py-2.5 text-left font-semibold w-36">Assign Position</th>
+                <th className="px-2 py-2.5 text-right font-semibold w-28">Unit Rate/MH</th>
+                <th className="px-2 py-2.5 text-right font-semibold w-28">Total Cost</th>
+                <th className="px-2 py-2.5 text-left font-semibold min-w-[100px]">Note</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -1177,36 +1273,55 @@ function Stage2Form({ rfq, onSave, onSaveDraft, onClose }) {
                             className="w-full px-2 py-1 text-xs border border-blue-300 rounded outline-none focus:border-blue-500 bg-white" />
                         </td>
                         <td className="px-2 py-1.5">
-                          <select value={editBuf.type} onChange={e => setBuf('type', e.target.value)}
+                          <select value={editBuf.category || ''} onChange={e => setBuf('category', e.target.value)}
                             className="w-full px-2 py-1 text-xs border border-blue-300 rounded outline-none focus:border-blue-500 bg-white">
-                            {MHE_TYPES.map(t => <option key={t}>{t}</option>)}
+                            <option value="">— Select —</option>
+                            {categories.map(c => <option key={c}>{c}</option>)}
                           </select>
                         </td>
                         <td className="px-2 py-1.5">
-                          <input value={editBuf.additionalInfo} onChange={e => setBuf('additionalInfo', e.target.value)}
+                          <select value={editBuf.task || ''} onChange={e => setBuf('task', e.target.value)}
+                            className="w-full px-2 py-1 text-xs border border-blue-300 rounded outline-none focus:border-blue-500 bg-white">
+                            <option value="">— Select —</option>
+                            {tasksForCat(editBuf.category || '').map(t => <option key={t}>{t}</option>)}
+                          </select>
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <select value={editBuf.difficultyLevel || 'AVG(Normal)'} onChange={e => setBuf('difficultyLevel', e.target.value)}
+                            className="w-full px-2 py-1 text-xs border border-blue-300 rounded outline-none focus:border-blue-500 bg-white">
+                            {DIFF_LEVELS.map(d => <option key={d}>{d}</option>)}
+                          </select>
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <input value={editBuf.additionalInfo || ''} onChange={e => setBuf('additionalInfo', e.target.value)}
                             placeholder="Detail…"
                             className="w-full px-2 py-1 text-xs border border-blue-300 rounded outline-none focus:border-blue-500 bg-white" />
                         </td>
                         <td className="px-2 py-1.5">
-                          <input type="text" inputMode="numeric" value={editBuf.qty} onChange={e => setBuf('qty', e.target.value)}
+                          <input type="text" inputMode="numeric" value={editBuf.qty || ''} onChange={e => setBuf('qty', e.target.value)}
                             className="w-full px-2 py-1 text-xs border border-blue-300 rounded outline-none focus:border-blue-500 bg-white text-right" />
                         </td>
-                        <td className="px-2 py-1.5">
-                          <input type="text" inputMode="numeric" value={editBuf.unitMH} onChange={e => setBuf('unitMH', e.target.value)}
-                            className="w-full px-2 py-1 text-xs border border-blue-300 rounded outline-none focus:border-blue-500 bg-white text-right" />
+                        <td className="px-2 py-1.5 text-right font-semibold text-slate-700 tabular-nums bg-slate-50">
+                          {editBuf.unitMH !== '' && editBuf.unitMH != null ? (+editBuf.unitMH).toFixed(2) : '—'}
                         </td>
                         <td className="px-2 py-1.5 text-right font-bold text-blue-700 tabular-nums">
-                          {+((parseFloat(editBuf.qty)||0)*(parseFloat(editBuf.unitMH)||0)).toFixed(2) || '—'}
+                          {editBuf.totalMH > 0 ? editBuf.totalMH.toFixed(2) : '—'}
                         </td>
                         <td className="px-2 py-1.5">
-                          <select value={editBuf.assignEngineer} onChange={e => setBuf('assignEngineer', e.target.value)}
+                          <select value={editBuf.assignPosition || ''} onChange={e => setBuf('assignPosition', e.target.value)}
                             className="w-full px-2 py-1 text-xs border border-blue-300 rounded outline-none focus:border-blue-500 bg-white">
                             <option value="">— Select —</option>
-                            {engOptions.map(n => <option key={n}>{n}</option>)}
+                            {positionOptions.map(p => <option key={p}>{p}</option>)}
                           </select>
                         </td>
+                        <td className="px-2 py-1.5 text-right font-semibold text-slate-700 tabular-nums bg-slate-50">
+                          {editBuf.unitRate !== '' && editBuf.unitRate != null ? (+editBuf.unitRate).toLocaleString() : '—'}
+                        </td>
+                        <td className="px-2 py-1.5 text-right font-bold text-emerald-700 tabular-nums bg-slate-50">
+                          {editBuf.totalCost > 0 ? editBuf.totalCost.toLocaleString() : '—'}
+                        </td>
                         <td className="px-2 py-1.5">
-                          <input value={editBuf.note} onChange={e => setBuf('note', e.target.value)}
+                          <input value={editBuf.note || ''} onChange={e => setBuf('note', e.target.value)}
                             placeholder="Note…"
                             className="w-full px-2 py-1 text-xs border border-blue-300 rounded outline-none focus:border-blue-500 bg-white" />
                         </td>
@@ -1214,12 +1329,24 @@ function Stage2Form({ rfq, onSave, onSaveDraft, onClose }) {
                     ) : (
                       <>
                         <td className="px-2 py-1.5 text-slate-800 font-medium">{row.activityName || <span className="text-slate-400 italic">—</span>}</td>
-                        <td className="px-2 py-1.5 text-slate-500">{row.type}</td>
+                        <td className="px-2 py-1.5 text-slate-500">{row.category || '—'}</td>
+                        <td className="px-2 py-1.5 text-slate-700 font-medium">{row.task || '—'}</td>
+                        <td className="px-2 py-1.5">
+                          {row.difficultyLevel ? (
+                            <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${
+                              row.difficultyLevel === 'Min(Easy)' ? 'bg-green-100 text-green-700' :
+                              row.difficultyLevel === 'Max(Hard)' ? 'bg-red-100 text-red-700' :
+                              'bg-blue-100 text-blue-700'
+                            }`}>{row.difficultyLevel}</span>
+                          ) : <span className="text-slate-400">—</span>}
+                        </td>
                         <td className="px-2 py-1.5 text-slate-500">{row.additionalInfo || '—'}</td>
                         <td className="px-2 py-1.5 text-right tabular-nums text-slate-700">{row.qty || '—'}</td>
-                        <td className="px-2 py-1.5 text-right tabular-nums text-slate-700">{row.unitMH || '—'}</td>
-                        <td className="px-2 py-1.5 text-right font-bold text-[#0f2035] tabular-nums">{row.totalMH > 0 ? row.totalMH : '—'}</td>
-                        <td className="px-2 py-1.5 text-slate-500 text-[10px]">{row.assignEngineer || '—'}</td>
+                        <td className="px-2 py-1.5 text-right tabular-nums text-slate-600">{row.unitMH != null && row.unitMH !== '' ? (+row.unitMH).toFixed(2) : '—'}</td>
+                        <td className="px-2 py-1.5 text-right font-bold text-[#0f2035] tabular-nums">{row.totalMH > 0 ? row.totalMH.toFixed(2) : '—'}</td>
+                        <td className="px-2 py-1.5 text-slate-600 text-[11px]">{row.assignPosition || '—'}</td>
+                        <td className="px-2 py-1.5 text-right tabular-nums text-slate-600">{row.unitRate != null && row.unitRate !== '' ? (+row.unitRate).toLocaleString() : '—'}</td>
+                        <td className="px-2 py-1.5 text-right font-bold text-emerald-700 tabular-nums">{row.totalCost > 0 ? row.totalCost.toLocaleString() : '—'}</td>
                         <td className="px-2 py-1.5 text-slate-500">{row.note || '—'}</td>
                       </>
                     )}
@@ -1229,9 +1356,11 @@ function Stage2Form({ rfq, onSave, onSaveDraft, onClose }) {
             </tbody>
             <tfoot className="bg-slate-100 border-t-2 border-slate-300">
               <tr>
-                <td colSpan={6} className="px-3 py-2 font-bold text-slate-700 text-right text-xs">Total Manhours:</td>
+                <td colSpan={8} className="px-3 py-2 font-bold text-slate-700 text-right text-xs">Total Manhours:</td>
                 <td className="px-3 py-2 font-bold text-[#0f2035] text-right tabular-nums">{totalMH.toFixed(2)}</td>
-                <td colSpan={3}></td>
+                <td className="px-3 py-2 font-bold text-slate-700 text-right text-xs">Total Direct Cost:</td>
+                <td colSpan={2} className="px-3 py-2 font-bold text-emerald-700 text-right tabular-nums">{totalDirectCost.toLocaleString()}</td>
+                <td></td>
               </tr>
             </tfoot>
           </table>
@@ -1239,6 +1368,181 @@ function Stage2Form({ rfq, onSave, onSaveDraft, onClose }) {
         {!canSubmit && (
           <p className="text-xs text-amber-600 mt-1">Add at least one activity and set a completion date before submitting.</p>
         )}
+      </div>
+
+      {/* Indirect cost Table */}
+      <div className="mt-6">
+        <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
+          <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+            <ClipboardList size={15} /> Indirect cost Table
+          </h3>
+          <button onClick={addIndirectRow}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg">
+            <Plus size={12} /> Add Item
+          </button>
+        </div>
+
+        <div className="overflow-x-auto rounded-xl border border-slate-200">
+          <table className="w-full text-xs" style={{ minWidth: 700 }}>
+            <thead className="bg-[#0f2035] text-white">
+              <tr>
+                <th className="px-2 py-2.5 text-center font-semibold w-14">#</th>
+                <th className="px-2 py-2.5 text-left font-semibold min-w-[80px]">Item</th>
+                <th className="px-2 py-2.5 text-left font-semibold min-w-[180px]">Description</th>
+                <th className="px-2 py-2.5 text-left font-semibold w-24">Unit</th>
+                <th className="px-2 py-2.5 text-right font-semibold w-24">Rate</th>
+                <th className="px-2 py-2.5 text-right font-semibold w-20">Qty</th>
+                <th className="px-2 py-2.5 text-right font-semibold w-28">Amount</th>
+                <th className="px-2 py-2.5 text-left font-semibold min-w-[100px]">Note</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {indirectRows.map((row, idx) => {
+                const isEditing = indirectEditingId !== null && indirectEditingId === row.id
+                return (
+                  <tr key={row.id} className={`${isEditing ? 'bg-blue-50 ring-1 ring-inset ring-blue-300' : 'hover:bg-slate-50 bg-cyan-50/20'}`}>
+                    {/* # + action buttons */}
+                    <td className="px-2 py-1.5 text-center w-14">
+                      <div className="flex flex-col items-center gap-0.5">
+                        <span className="font-bold text-slate-400 text-[10px]">{String(idx + 1).padStart(2, '0')}</span>
+                        {!isEditing && (
+                          <div className="flex gap-0.5">
+                            <button onClick={() => startIndirectEdit(row)} title="Edit"
+                              className="p-0.5 rounded text-blue-400 hover:text-blue-600 hover:bg-blue-50 transition-colors">
+                              <Pencil size={11} />
+                            </button>
+                            <button onClick={() => removeIndirectRow(row.id)} title="Delete"
+                              className="p-0.5 rounded text-red-400 hover:text-red-600 hover:bg-red-50 transition-colors">
+                              <Trash2 size={11} />
+                            </button>
+                          </div>
+                        )}
+                        {isEditing && (
+                          <div className="flex gap-0.5">
+                            <button onClick={saveIndirectEdit} title="Save"
+                              className="p-0.5 rounded text-green-600 hover:bg-green-50 transition-colors">
+                              <CheckCircle size={11} />
+                            </button>
+                            <button onClick={cancelIndirectEdit} title="Cancel"
+                              className="p-0.5 rounded text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors">
+                              <XCircle size={11} />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </td>
+
+                    {isEditing ? (
+                      <>
+                        <td className="px-2 py-1.5">
+                          <input value={indirectEditBuf.item || ''} onChange={e => setIndirectBuf('item', e.target.value)}
+                            placeholder="Item…"
+                            className="w-full px-2 py-1 text-xs border border-blue-300 rounded outline-none focus:border-blue-500 bg-white" />
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <input value={indirectEditBuf.description || ''} onChange={e => setIndirectBuf('description', e.target.value)}
+                            placeholder="Description…"
+                            className="w-full px-2 py-1 text-xs border border-blue-300 rounded outline-none focus:border-blue-500 bg-white" />
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <input value={indirectEditBuf.unit || ''} onChange={e => setIndirectBuf('unit', e.target.value)}
+                            placeholder="Unit…"
+                            className="w-full px-2 py-1 text-xs border border-blue-300 rounded outline-none focus:border-blue-500 bg-white" />
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <input type="text" inputMode="numeric" value={indirectEditBuf.rate || ''} onChange={e => setIndirectBuf('rate', e.target.value)}
+                            className="w-full px-2 py-1 text-xs border border-blue-300 rounded outline-none focus:border-blue-500 bg-white text-right" />
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <input type="text" inputMode="numeric" value={indirectEditBuf.qty || ''} onChange={e => setIndirectBuf('qty', e.target.value)}
+                            className="w-full px-2 py-1 text-xs border border-blue-300 rounded outline-none focus:border-blue-500 bg-white text-right" />
+                        </td>
+                        <td className="px-2 py-1.5 text-right font-bold text-emerald-700 tabular-nums">
+                          {+(parseFloat(indirectEditBuf.rate || 0) * parseFloat(indirectEditBuf.qty || 0)).toFixed(2) || '—'}
+                        </td>
+                        <td className="px-2 py-1.5">
+                          <input value={indirectEditBuf.note || ''} onChange={e => setIndirectBuf('note', e.target.value)}
+                            placeholder="Note…"
+                            className="w-full px-2 py-1 text-xs border border-blue-300 rounded outline-none focus:border-blue-500 bg-white" />
+                        </td>
+                      </>
+                    ) : (
+                      <>
+                        <td className="px-2 py-1.5 text-slate-700 font-medium">{row.item || <span className="text-slate-400 italic">—</span>}</td>
+                        <td className="px-2 py-1.5 text-slate-600">{row.description || '—'}</td>
+                        <td className="px-2 py-1.5 text-slate-500">{row.unit || '—'}</td>
+                        <td className="px-2 py-1.5 text-right tabular-nums text-slate-700">{row.rate || '—'}</td>
+                        <td className="px-2 py-1.5 text-right tabular-nums text-slate-700">{row.qty || '—'}</td>
+                        <td className="px-2 py-1.5 text-right font-bold text-emerald-700 tabular-nums">{row.amount > 0 ? row.amount.toLocaleString() : '—'}</td>
+                        <td className="px-2 py-1.5 text-slate-500">{row.note || '—'}</td>
+                      </>
+                    )}
+                  </tr>
+                )
+              })}
+            </tbody>
+            <tfoot className="bg-slate-100 border-t-2 border-slate-300">
+              <tr>
+                <td colSpan={6} className="px-3 py-2 font-bold text-slate-700 text-right text-xs">Total Indirect Cost:</td>
+                <td className="px-3 py-2 font-bold text-emerald-700 text-right tabular-nums">{totalIndirectCost.toLocaleString()}</td>
+                <td></td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>
+
+      {/* Cost Summary Table A3.3 */}
+      <div className="mt-6">
+        <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-2 mb-2">
+          <ClipboardList size={15} /> Cost Summary (Table A + Table B)
+        </h3>
+        <div className="overflow-x-auto rounded-xl border border-slate-200">
+          <table className="w-full text-xs" style={{ minWidth: 700 }}>
+            <thead className="bg-[#0f2035] text-white">
+              <tr>
+                <th className="px-4 py-2.5 text-left font-semibold">Description</th>
+                <th className="px-4 py-2.5 text-right font-semibold w-32">Amount (Bath)</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              <tr className="bg-slate-50">
+                <td className="px-4 py-2 text-slate-700 font-medium">Total Direct Cost</td>
+                <td className="px-4 py-2 text-right font-bold text-emerald-700 tabular-nums">{totalDirectCost.toLocaleString()}</td>
+              </tr>
+              <tr className="bg-slate-50">
+                <td className="px-4 py-2 text-slate-700 font-medium">Total Indirect Cost</td>
+                <td className="px-4 py-2 text-right font-bold text-emerald-700 tabular-nums">{totalIndirectCost.toLocaleString()}</td>
+              </tr>
+              <tr className="bg-amber-50">
+                <td className="px-4 py-2 text-slate-800 font-bold">Total Direct + Indirect (Table A + Table B)</td>
+                <td className="px-4 py-2 text-right font-bold text-[#0f2035] tabular-nums">{totalAB.toLocaleString()}</td>
+              </tr>
+              <tr className="bg-orange-50">
+                <td className="px-4 py-2 text-slate-700 font-medium flex items-center gap-2">
+                  <span>Overhead + Profit %</span>
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    value={overheadPct}
+                    onChange={e => setOverheadPct(parseFloat(e.target.value) || 0)}
+                    className="w-16 px-2 py-1 text-xs border border-orange-300 rounded outline-none focus:border-orange-500 bg-white text-center"
+                  />
+                  <span>%</span>
+                </td>
+                <td className="px-4 py-2 text-right font-bold text-orange-700 tabular-nums">{overheadAmount.toLocaleString()}</td>
+              </tr>
+            </tbody>
+            <tfoot className="bg-yellow-100 border-t-2 border-yellow-300">
+              <tr>
+                <td className="px-4 py-3 font-bold text-slate-800 text-sm">Grand Total (Total Direct + Total Indirect + Overhead + Profit)</td>
+                <td className="px-4 py-3 font-bold text-emerald-800 text-right tabular-nums text-sm">{grandTotal.toLocaleString()}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+        <p className="text-[10px] text-slate-500 mt-1 text-right">Cost excluding Vat 7%</p>
       </div>
 
       {/* Unit Rate Reference Panel */}
@@ -2789,7 +3093,7 @@ export default function RFQ() {
 
       {/* Stage 2 — Manhour Plan */}
       <Modal isOpen={activeModal?.type === 'stage2'} onClose={closeModal}
-        title={`Manhour Plan — ${liveRfq?.requestWorkNo || ''}`} size="2xl" draggable>
+        title={`Manhour Plan — ${liveRfq?.requestWorkNo || ''}`} size="full" draggable>
         {liveRfq && (
           <>
             <div className="px-6 pt-4"><Stepper status={liveRfq.status} /></div>
