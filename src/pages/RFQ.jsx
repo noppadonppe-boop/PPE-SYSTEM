@@ -940,7 +940,14 @@ function Stage2Form({ rfq, onSave, onSaveDraft, onClose }) {
     const src = rfq.indirectCostRows && rfq.indirectCostRows.length > 0
       ? rfq.indirectCostRows
       : [{ id: `ind-${Date.now()}`, item: '', description: '', unit: '', rate: '', qty: '', amount: 0, note: '' }]
-    return src.map((r, i) => r.id ? r : { ...r, id: `ind-${Date.now()}-${i}` })
+    return src.map((r, i) => {
+      const row = r.id ? { ...r } : { ...r, id: `ind-${Date.now()}-${i}` }
+      // Recalculate amount from rate × qty in case it was not saved correctly
+      const rate = parseFloat(row.rate) || 0
+      const qty  = parseFloat(row.qty)  || 0
+      row.amount = +(rate * qty).toFixed(2)
+      return row
+    })
   })
   const [indirectEditingId, setIndirectEditingId] = useState(null)
   const [indirectEditBuf, setIndirectEditBuf] = useState({})
@@ -952,7 +959,15 @@ function Stage2Form({ rfq, onSave, onSaveDraft, onClose }) {
     setIndirectEditingId(null)
     setIndirectEditBuf({})
   }
-  const setIndirectBuf = (field, val) => setIndirectEditBuf(p => ({ ...p, [field]: val }))
+  const setIndirectBuf = (field, val) => setIndirectEditBuf(p => {
+    const updated = { ...p, [field]: val }
+    if (field === 'rate' || field === 'qty') {
+      const rate = parseFloat(field === 'rate' ? val : updated.rate) || 0
+      const qty  = parseFloat(field === 'qty'  ? val : updated.qty)  || 0
+      updated.amount = +(rate * qty).toFixed(2)
+    }
+    return updated
+  })
 
   const addIndirectRow = () => setIndirectRows(prev => [...prev, { id: `ind-${Date.now()}`, item: '', description: '', unit: '', rate: '', qty: '', amount: 0, note: '' }])
   const removeIndirectRow = (id) => setIndirectRows(prev => prev.filter(r => r.id !== id))
@@ -1628,32 +1643,51 @@ function Stage2Form({ rfq, onSave, onSaveDraft, onClose }) {
 
 // ─── Stage 3: Cost Estimate (ppeManager) ─────────────────────────────────────
 
-const EMPTY_INDIRECT = { description: '', unit: '', rate: '', qty: '', note: '' }
+const EMPTY_INDIRECT = { item: '', description: '', unit: '', rate: '', qty: '', amount: 0, note: '' }
 
 function Stage3Form({ rfq, onSave, onSaveDraft, onClose, onCancel }) {
-  // Direct cost rows come from MHE rows — PPE Manager adds Rate per row
+  const { unitRates, engStandardRates } = useApp()
+
+  // Direct cost rows come from MHE rows — with all Stage 2 fields
   const mheRows = rfq.mheRows || rfq.wbsItems || []
-  const [directRows, setDirectRows] = useState(() =>
-    (rfq.directCostRows && rfq.directCostRows.length > 0)
+  const [directRows, setDirectRows] = useState(() => {
+    const src = (rfq.directCostRows && rfq.directCostRows.length > 0)
       ? rfq.directCostRows
       : mheRows.map(r => ({
           id: r.id,
           activityName: r.activityName || r.task || '',
-          type: r.type || '',
+          category: r.category || '',
+          task: r.task || '',
+          difficultyLevel: r.difficultyLevel || 'AVG(Normal)',
+          additionalInfo: r.additionalInfo || '',
           qty: r.qty || 0,
           unitMH: r.unitMH || 0,
           totalMH: r.totalMH || 0,
-          assignEngineer: r.assignEngineer || '',
-          rate: rfq.directCostRows ? '' : (r.rate || ''),
-          totalCost: 0,
+          assignPosition: r.assignPosition || '',
+          unitRate: r.unitRate || '',
+          totalCost: r.totalCost || 0,
           note: r.note || '',
         }))
-  )
-  const [indirectRows, setIndirectRows] = useState(
-    rfq.indirectCostRows && rfq.indirectCostRows.length > 0
+    return src.map((r, i) => {
+      const row = r.id ? { ...r } : { ...r, id: `dc-${Date.now()}-${i}` }
+      // Recalculate totalCost on load
+      row.totalMH = +(parseFloat(row.qty || 0) * parseFloat(row.unitMH || 0)).toFixed(2)
+      row.totalCost = +(parseFloat(row.totalMH || 0) * parseFloat(row.unitRate || 0)).toFixed(2)
+      return row
+    })
+  })
+  const [indirectRows, setIndirectRows] = useState(() => {
+    const src = rfq.indirectCostRows && rfq.indirectCostRows.length > 0
       ? rfq.indirectCostRows
       : [{ ...EMPTY_INDIRECT, id: `ind-${Date.now()}` }]
-  )
+    return src.map((r, i) => {
+      const row = r.id ? { ...r } : { ...r, id: `ind-${Date.now()}-${i}` }
+      const rate = parseFloat(row.rate) || 0
+      const qty  = parseFloat(row.qty)  || 0
+      row.amount = +(rate * qty).toFixed(2)
+      return row
+    })
+  })
   const [overheadPct, setOverheadPct] = useState(rfq.overheadPct ?? 15)
   const [submitNote, setSubmitNote]   = useState(rfq.costDraftNote || '')
   const [showConfirmCancel, setShowConfirmCancel] = useState(false)
@@ -1663,19 +1697,48 @@ function Stage3Form({ rfq, onSave, onSaveDraft, onClose, onCancel }) {
   // Comment history
   const commentHistory = rfq.costComments || []
 
-  // Direct cost calculations
-  const updateDirect = (id, field, value) => setDirectRows(prev => prev.map(r => {
-    if (r.id !== id) return r
-    const updated = { ...r, [field]: value }
-    if (field === 'rate') {
-      updated.totalCost = +(parseFloat(value || 0) * (r.totalMH || 0)).toFixed(2)
+  // Direct cost helpers (same as Stage 2)
+  const categories = [...new Set(unitRates.map(r => r.category).filter(Boolean))].sort()
+  const tasksForCat = (cat) => [...new Set(unitRates.filter(r => r.category === cat).map(r => r.task).filter(Boolean))]
+  const positionOptions = engStandardRates.map(r => r.position)
+
+  const applyDirectChange = (row, field, value) => {
+    const updated = { ...row, [field]: value }
+    if (field === 'category') { updated.task = ''; updated.unitMH = ''; updated.totalMH = 0 }
+    if ((field === 'task' || field === 'difficultyLevel') && updated.task) {
+      const ur = unitRates.find(r => r.category === updated.category && r.task === updated.task)
+      if (ur) {
+        updated.unitMH = updated.difficultyLevel === 'Min(Easy)' ? (ur.min ?? '')
+          : updated.difficultyLevel === 'Max(Hard)' ? (ur.max ?? '') : (ur.avg ?? '')
+      }
     }
+    if (['qty', 'unitMH', 'task', 'difficultyLevel'].includes(field)) {
+      const q = parseFloat(updated.qty) || 0
+      const u = parseFloat(updated.unitMH) || 0
+      updated.totalMH = +(q * u).toFixed(2)
+    }
+    if (field === 'totalMH') {
+      updated.totalMH = parseFloat(value) || 0
+    }
+    if (field === 'assignPosition') {
+      const esr = engStandardRates.find(r => r.position === value)
+      updated.unitRate = esr ? esr.hourRate : ''
+    }
+    if (field === 'unitRate') {
+      updated.unitRate = value
+    }
+    updated.totalCost = +(parseFloat(updated.totalMH || 0) * parseFloat(updated.unitRate || 0)).toFixed(2)
     return updated
-  }))
+  }
+
+  const updateDirect = (id, field, value) => setDirectRows(prev => prev.map(r => r.id !== id ? r : applyDirectChange(r, field, value)))
+  const addDirectRow = () => setDirectRows(prev => [...prev, { ...EMPTY_MHE_ROW, id: `dc-${Date.now()}` }])
+  const removeDirectRow = (id) => setDirectRows(prev => prev.filter(r => r.id !== id))
+  const totalMH = directRows.reduce((s, r) => s + (r.totalMH || 0), 0)
   const totalDirect = directRows.reduce((s, r) => s + (parseFloat(r.totalCost) || 0), 0)
 
   // Indirect cost calculations
-  const addIndirect = () => setIndirectRows(prev => [...prev, { ...EMPTY_INDIRECT, id: `ind-${Date.now()}` }])
+  const addIndirect = () => setIndirectRows(prev => [...prev, { ...EMPTY_INDIRECT, id: `ind-${Date.now()}`, amount: 0 }])
   const removeIndirect = (id) => setIndirectRows(prev => prev.filter(r => r.id !== id))
   const updateIndirect = (id, field, value) => setIndirectRows(prev => prev.map(r => {
     if (r.id !== id) return r
@@ -1694,7 +1757,7 @@ function Stage3Form({ rfq, onSave, onSaveDraft, onClose, onCancel }) {
   const overheadAmt  = +(totalAB * (overheadPct / 100)).toFixed(2)
   const grandTotal   = +(totalAB + overheadAmt).toFixed(2)
 
-  const canSubmit = directRows.some(r => parseFloat(r.rate) > 0) && submitNote.trim()
+  const canSubmit = directRows.some(r => parseFloat(r.unitRate) > 0) && submitNote.trim()
 
   const buildCostPayload = () => ({
     directCostRows:   directRows,
@@ -1756,55 +1819,125 @@ function Stage3Form({ rfq, onSave, onSaveDraft, onClose, onCancel }) {
 
       {/* Table A: Direct Cost */}
       <div>
-        <p className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-2 flex items-center gap-1">
-          <Calculator size={13} /> Table A — Direct Cost Estimate
-        </p>
+        <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
+          <p className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1">
+            <Calculator size={13} /> Table A — Direct Cost Estimate
+          </p>
+          <button onClick={addDirectRow}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg">
+            <Plus size={12} /> Add Activity
+          </button>
+        </div>
         <div className="overflow-x-auto rounded-xl border border-slate-200">
-          <table className="w-full text-xs" style={{ minWidth: 860 }}>
+          <table className="w-full text-xs" style={{ minWidth: 1400 }}>
             <thead className="bg-[#0f2035] text-white">
               <tr>
-                <th className="px-2 py-2.5 text-center w-10">#</th>
-                <th className="px-2 py-2.5 text-left min-w-[140px]">Activity Name</th>
-                <th className="px-2 py-2.5 text-left w-28">Type</th>
-                <th className="px-2 py-2.5 text-right w-14">Qty</th>
-                <th className="px-2 py-2.5 text-right w-20">Unit MH</th>
-                <th className="px-2 py-2.5 text-right w-20">Total MH</th>
-                <th className="px-2 py-2.5 text-left w-32">Assign Eng.</th>
-                <th className="px-2 py-2.5 text-right w-28">Rate (THB/MH)</th>
-                <th className="px-2 py-2.5 text-right w-28">Total Cost</th>
-                <th className="px-2 py-2.5 text-left min-w-[100px]">Note</th>
+                <th className="px-2 py-2.5 text-center font-semibold w-14">#</th>
+                <th className="px-2 py-2.5 text-left font-semibold min-w-[140px]">Activity Name</th>
+                <th className="px-2 py-2.5 text-left font-semibold w-32">Category</th>
+                <th className="px-2 py-2.5 text-left font-semibold min-w-[140px]">Task</th>
+                <th className="px-2 py-2.5 text-left font-semibold w-28">Difficulty Level</th>
+                <th className="px-2 py-2.5 text-left font-semibold min-w-[100px]">Additional Info</th>
+                <th className="px-2 py-2.5 text-right font-semibold w-16">Qty</th>
+                <th className="px-2 py-2.5 text-right font-semibold w-24">Unit MH</th>
+                <th className="px-2 py-2.5 text-right font-semibold w-22">Total MH</th>
+                <th className="px-2 py-2.5 text-left font-semibold w-36">Assign Position</th>
+                <th className="px-2 py-2.5 text-right font-semibold w-28">Unit Rate/MH</th>
+                <th className="px-2 py-2.5 text-right font-semibold w-28">Total Cost</th>
+                <th className="px-2 py-2.5 text-left font-semibold min-w-[100px]">Note</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {directRows.length === 0 ? (
-                <tr><td colSpan={10} className="px-3 py-6 text-center text-slate-400">No activities from Manhour Plan.</td></tr>
+                <tr><td colSpan={13} className="px-3 py-6 text-center text-slate-400">No activities. Click "Add Activity" to start.</td></tr>
               ) : directRows.map((row, idx) => (
                 <tr key={row.id} className="hover:bg-cyan-50 bg-cyan-50/20">
-                  <td className="px-2 py-1.5 text-center text-slate-400 font-bold text-[10px]">{String(idx+1).padStart(2,'0')}</td>
-                  <td className="px-2 py-1.5 font-medium text-slate-800">{row.activityName}</td>
-                  <td className="px-2 py-1.5 text-slate-500">{row.type}</td>
-                  <td className="px-2 py-1.5 text-right tabular-nums">{row.qty}</td>
-                  <td className="px-2 py-1.5 text-right tabular-nums">{row.unitMH}</td>
-                  <td className="px-2 py-1.5 text-right font-semibold tabular-nums">{row.totalMH}</td>
-                  <td className="px-2 py-1.5 text-slate-500">{row.assignEngineer}</td>
+                  <td className="px-2 py-1.5 text-center w-14">
+                    <div className="flex flex-col items-center gap-0.5">
+                      <span className="font-bold text-slate-400 text-[10px]">{String(idx + 1).padStart(2, '0')}</span>
+                      <button onClick={() => removeDirectRow(row.id)} title="Delete"
+                        className="p-0.5 rounded text-red-400 hover:text-red-600 hover:bg-red-50 transition-colors">
+                        <Trash2 size={11} />
+                      </button>
+                    </div>
+                  </td>
                   <td className="px-2 py-1.5">
-                    <input type="number" min="0" step="1" value={row.rate}
-                      onChange={e => updateDirect(row.id, 'rate', e.target.value)}
+                    <input value={row.activityName || ''} onChange={e => updateDirect(row.id, 'activityName', e.target.value)}
+                      placeholder="Activity name…"
+                      className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-blue-500 bg-white" />
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <select value={row.category || ''} onChange={e => updateDirect(row.id, 'category', e.target.value)}
+                      className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-blue-500 bg-white">
+                      <option value="">— Select —</option>
+                      {categories.map(c => <option key={c}>{c}</option>)}
+                    </select>
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <select value={row.task || ''} onChange={e => updateDirect(row.id, 'task', e.target.value)}
+                      className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-blue-500 bg-white">
+                      <option value="">— Select —</option>
+                      {tasksForCat(row.category || '').map(t => <option key={t}>{t}</option>)}
+                    </select>
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <select value={row.difficultyLevel || 'AVG(Normal)'} onChange={e => updateDirect(row.id, 'difficultyLevel', e.target.value)}
+                      className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-blue-500 bg-white">
+                      {DIFF_LEVELS.map(d => <option key={d}>{d}</option>)}
+                    </select>
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <input value={row.additionalInfo || ''} onChange={e => updateDirect(row.id, 'additionalInfo', e.target.value)}
+                      placeholder="Detail…"
+                      className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-blue-500 bg-white" />
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <input type="text" inputMode="numeric" value={row.qty || ''} onChange={e => updateDirect(row.id, 'qty', e.target.value)}
+                      className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-blue-500 bg-white text-right" />
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <input type="text" inputMode="numeric" value={row.unitMH != null && row.unitMH !== '' ? row.unitMH : ''}
+                      onChange={e => updateDirect(row.id, 'unitMH', e.target.value)}
                       placeholder="0"
-                      className="w-full px-2 py-1 text-xs border border-amber-300 rounded outline-none focus:border-amber-500 bg-amber-50 text-right font-semibold" />
+                      className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-blue-500 bg-white text-right font-semibold" />
                   </td>
-                  <td className="px-2 py-1.5 text-right font-bold text-[#0f2035] tabular-nums">
-                    {row.totalCost > 0 ? row.totalCost.toLocaleString('th-TH') : '—'}
+                  <td className="px-2 py-1.5">
+                    <input type="text" inputMode="numeric" value={row.totalMH || ''}
+                      onChange={e => updateDirect(row.id, 'totalMH', e.target.value)}
+                      placeholder="0"
+                      className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-blue-500 bg-white text-right font-bold text-blue-700" />
                   </td>
-                  <td className="px-2 py-1.5 text-slate-400 text-[10px]">{row.note}</td>
+                  <td className="px-2 py-1.5">
+                    <select value={row.assignPosition || ''} onChange={e => updateDirect(row.id, 'assignPosition', e.target.value)}
+                      className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-blue-500 bg-white">
+                      <option value="">— Select —</option>
+                      {positionOptions.map(p => <option key={p}>{p}</option>)}
+                    </select>
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <input type="text" inputMode="numeric" value={row.unitRate != null && row.unitRate !== '' ? row.unitRate : ''}
+                      onChange={e => updateDirect(row.id, 'unitRate', e.target.value)}
+                      placeholder="0"
+                      className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-blue-500 bg-white text-right font-semibold" />
+                  </td>
+                  <td className="px-2 py-1.5 text-right font-bold text-emerald-700 tabular-nums bg-slate-50">
+                    {row.totalCost > 0 ? row.totalCost.toLocaleString() : '—'}
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <input value={row.note || ''} onChange={e => updateDirect(row.id, 'note', e.target.value)}
+                      placeholder="Note…"
+                      className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-blue-500 bg-white" />
+                  </td>
                 </tr>
               ))}
             </tbody>
             <tfoot className="bg-slate-100 border-t-2 border-slate-300">
               <tr>
-                <td colSpan={8} className="px-3 py-2 font-bold text-slate-700 text-right text-xs">Total Direct Cost:</td>
-                <td className="px-3 py-2 font-bold text-[#0f2035] text-right tabular-nums">{totalDirect.toLocaleString('th-TH')}</td>
-                <td><span className="text-[10px] text-slate-400 px-1">Baht</span></td>
+                <td colSpan={8} className="px-3 py-2 font-bold text-slate-700 text-right text-xs">Total Manhours:</td>
+                <td className="px-3 py-2 font-bold text-[#0f2035] text-right tabular-nums">{totalMH.toFixed(2)}</td>
+                <td className="px-3 py-2 font-bold text-slate-700 text-right text-xs">Total Direct Cost:</td>
+                <td colSpan={2} className="px-3 py-2 font-bold text-emerald-700 text-right tabular-nums">{totalDirect.toLocaleString()}</td>
+                <td></td>
               </tr>
             </tfoot>
           </table>
@@ -1823,16 +1956,17 @@ function Stage3Form({ rfq, onSave, onSaveDraft, onClose, onCancel }) {
           </button>
         </div>
         <div className="overflow-x-auto rounded-xl border border-slate-200">
-          <table className="w-full text-xs" style={{ minWidth: 720 }}>
+          <table className="w-full text-xs" style={{ minWidth: 780 }}>
             <thead className="bg-indigo-800 text-white">
               <tr>
-                <th className="px-2 py-2.5 text-center w-10">Item</th>
-                <th className="px-2 py-2.5 text-left min-w-[180px]">Description</th>
-                <th className="px-2 py-2.5 text-left w-20">Unit</th>
-                <th className="px-2 py-2.5 text-right w-24">Rate</th>
-                <th className="px-2 py-2.5 text-right w-24">Qty</th>
-                <th className="px-2 py-2.5 text-right w-28">Amount</th>
-                <th className="px-2 py-2.5 text-left min-w-[100px]">Note</th>
+                <th className="px-2 py-2.5 text-center font-semibold w-14">#</th>
+                <th className="px-2 py-2.5 text-left font-semibold min-w-[80px]">Item</th>
+                <th className="px-2 py-2.5 text-left font-semibold min-w-[180px]">Description</th>
+                <th className="px-2 py-2.5 text-left font-semibold w-24">Unit</th>
+                <th className="px-2 py-2.5 text-right font-semibold w-24">Rate</th>
+                <th className="px-2 py-2.5 text-right font-semibold w-20">Qty</th>
+                <th className="px-2 py-2.5 text-right font-semibold w-28">Amount</th>
+                <th className="px-2 py-2.5 text-left font-semibold min-w-[100px]">Note</th>
                 <th className="px-2 py-2.5 w-8"></th>
               </tr>
             </thead>
@@ -1841,30 +1975,35 @@ function Stage3Form({ rfq, onSave, onSaveDraft, onClose, onCancel }) {
                 <tr key={row.id} className="hover:bg-indigo-50">
                   <td className="px-2 py-1.5 text-center text-slate-400 font-bold text-[10px]">{String(idx+1).padStart(2,'0')}</td>
                   <td className="px-2 py-1.5">
-                    <input value={row.description} onChange={e => updateIndirect(row.id, 'description', e.target.value)}
+                    <input value={row.item || ''} onChange={e => updateIndirect(row.id, 'item', e.target.value)}
+                      placeholder="Item…"
+                      className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-indigo-400 bg-white" />
+                  </td>
+                  <td className="px-2 py-1.5">
+                    <input value={row.description || ''} onChange={e => updateIndirect(row.id, 'description', e.target.value)}
                       placeholder="Description…"
                       className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-indigo-400 bg-white" />
                   </td>
                   <td className="px-2 py-1.5">
-                    <input value={row.unit} onChange={e => updateIndirect(row.id, 'unit', e.target.value)}
+                    <input value={row.unit || ''} onChange={e => updateIndirect(row.id, 'unit', e.target.value)}
                       placeholder="ea / m²…"
                       className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-indigo-400 bg-white" />
                   </td>
                   <td className="px-2 py-1.5">
-                    <input type="number" min="0" value={row.rate} onChange={e => updateIndirect(row.id, 'rate', e.target.value)}
+                    <input type="number" min="0" value={row.rate || ''} onChange={e => updateIndirect(row.id, 'rate', e.target.value)}
                       placeholder="0"
                       className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-indigo-400 bg-white text-right" />
                   </td>
                   <td className="px-2 py-1.5">
-                    <input type="text" inputMode="numeric" value={row.qty} onChange={e => updateIndirect(row.id, 'qty', e.target.value)}
+                    <input type="text" inputMode="numeric" value={row.qty || ''} onChange={e => updateIndirect(row.id, 'qty', e.target.value)}
                       placeholder="0"
                       className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-indigo-400 bg-white text-right" />
                   </td>
-                  <td className="px-2 py-1.5 text-right font-semibold tabular-nums text-indigo-800">
+                  <td className="px-2 py-1.5 text-right font-bold text-emerald-700 tabular-nums">
                     {row.amount > 0 ? row.amount.toLocaleString('th-TH') : '—'}
                   </td>
                   <td className="px-2 py-1.5">
-                    <input value={row.note} onChange={e => updateIndirect(row.id, 'note', e.target.value)}
+                    <input value={row.note || ''} onChange={e => updateIndirect(row.id, 'note', e.target.value)}
                       placeholder="Note…"
                       className="w-full px-2 py-1 text-xs border border-slate-200 rounded outline-none focus:border-indigo-400 bg-white" />
                   </td>
@@ -1876,12 +2015,12 @@ function Stage3Form({ rfq, onSave, onSaveDraft, onClose, onCancel }) {
                 </tr>
               ))}
               {indirectRows.length === 0 && (
-                <tr><td colSpan={8} className="px-3 py-4 text-center text-slate-400">No indirect cost items.</td></tr>
+                <tr><td colSpan={9} className="px-3 py-4 text-center text-slate-400">No indirect cost items.</td></tr>
               )}
             </tbody>
             <tfoot className="bg-indigo-50 border-t-2 border-indigo-200">
               <tr>
-                <td colSpan={5} className="px-3 py-2 font-bold text-indigo-800 text-right text-xs">Total Indirect Cost:</td>
+                <td colSpan={6} className="px-3 py-2 font-bold text-indigo-800 text-right text-xs">Total Indirect Cost:</td>
                 <td className="px-3 py-2 font-bold text-indigo-900 text-right tabular-nums">{totalIndirect.toLocaleString('th-TH')}</td>
                 <td><span className="text-[10px] text-slate-400 px-1">Baht</span></td>
                 <td></td>
