@@ -31,7 +31,7 @@ const NAV_ITEMS = [
     id: 'master',
     label: 'Master Data',
     icon: Database,
-    roles: ['ppeLead', 'ppeManager', 'ppeAdmin', 'ppeTeam', 'MasterAdmin'],
+    roles: ['ppeLead', 'ppeManager', 'ppeAdmin', 'MasterAdmin'],
     children: [
       {
         id: 'unit-rates',
@@ -58,7 +58,7 @@ const NAV_ITEMS = [
     label: 'RFQ & Estimation',
     icon: FileText,
     path: '/rfq',
-    roles: null,
+    roles: ['Requestor', 'ppeLead', 'ppeManager', 'ppeAdmin', 'MasterAdmin', 'GM/MD'],
   },
   {
     id: 'work-orders',

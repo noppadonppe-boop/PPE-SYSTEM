@@ -75,6 +75,7 @@ export function AppProvider({ children }) {
   const [rfqs,              setRfqs]              = useState([])
   const [workOrders,        setWorkOrders]        = useState([])
   const [dailyReports,      setDailyReports]      = useState([])
+  const [unitRateCategories, setUnitRateCategories] = useState([])
 
   // Loading / error state — start as true, resolve after auth + data ready
   const [loading, setLoading] = useState(true)
@@ -93,6 +94,7 @@ export function AppProvider({ children }) {
       setRfqs([])
       setWorkOrders([])
       setDailyReports([])
+      setUnitRateCategories([])
       setDbError(null)
       setLoading(false)
       return
@@ -102,7 +104,7 @@ export function AppProvider({ children }) {
     setLoading(true)
     setDbError(null)
     let resolved = 0
-    const total = 6
+    const total = 7
     const markLoaded = () => { resolved++; if (resolved >= total) setLoading(false) }
 
     const snap = (colName, setter) =>
@@ -126,6 +128,7 @@ export function AppProvider({ children }) {
       snap('rfqs',             setRfqs),
       snap('workOrders',       setWorkOrders),
       snap('dailyReports',     setDailyReports),
+      snap('unitRateCategories', setUnitRateCategories),
     ]
 
     return () => unsubs.forEach(u => u())
@@ -135,6 +138,20 @@ export function AppProvider({ children }) {
   const safeMerge = (data, extra = {}) => {
     const safe = firestoreSafe(data)
     return safe ? { ...safe, ...extra } : null
+  }
+
+  // ── Unit Rate Category CRUD ─────────────────────────────────────────────
+  const addUnitRateCategory = async (name) => {
+    const id = name.trim()
+    if (!id) return
+    await guardedUpdate(`add-urc-${id}`, async () => {
+      await setDoc(subDocRef('unitRateCategories', id), { name: id, createdAt: serverTimestamp() })
+    })
+  }
+  const deleteUnitRateCategory = async (name) => {
+    const id = name.trim()
+    if (!id) return
+    await deleteDoc(subDocRef('unitRateCategories', id))
   }
 
   // ── Unit Rate CRUD ──────────────────────────────────────────────────────
@@ -374,6 +391,7 @@ export function AppProvider({ children }) {
     userRoles,
     userHasRole,
     unitRates, addUnitRate, updateUnitRate, deleteUnitRate,
+    unitRateCategories, addUnitRateCategory, deleteUnitRateCategory,
     engStandardRates, addEngStandardRate, updateEngStandardRate, deleteEngStandardRate,
     teamRates, addTeamRate, updateTeamRate, deleteTeamRate,
     rfqs, addRfq, updateRfq, deleteRfq,

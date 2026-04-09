@@ -16,9 +16,26 @@ const DIFFICULTY_OPTIONS = [
 const EMPTY_FORM = { category: 'Mechanical', task: '', unit: '', min: '', max: '', avg: '', difficultyFactor: '', adjustUnitMH: '' }
 
 export default function UnitRates() {
-  const { unitRates, addUnitRate, updateUnitRate, deleteUnitRate, userHasRole } = useApp()
+  const { unitRates, addUnitRate, updateUnitRate, deleteUnitRate, userHasRole, unitRateCategories, addUnitRateCategory, deleteUnitRateCategory } = useApp()
 
   const canEdit = userHasRole(['ppeLead', 'ppeManager', 'ppeAdmin', 'MasterAdmin', 'GM/MD'])
+
+  const allCategories = useMemo(() => {
+    const list = [...CATEGORIES]
+    if (unitRateCategories) {
+      unitRateCategories.forEach(c => {
+        if (c.name && !list.includes(c.name)) list.push(c.name)
+      })
+    }
+    if (unitRates) {
+      unitRates.forEach(r => {
+        if (r.category && !list.includes(r.category)) {
+          list.push(r.category)
+        }
+      })
+    }
+    return list
+  }, [unitRates, unitRateCategories])
 
   // ── Excel state ──────────────────────────────────────────────────────────
   const importRef = useRef(null)
@@ -35,6 +52,9 @@ export default function UnitRates() {
   const [form, setForm]             = useState(EMPTY_FORM)
   const [errors, setErrors]         = useState({})
   const [deleteTarget, setDeleteTarget] = useState(null)
+  
+  const [isAddingCategory, setIsAddingCategory] = useState(false)
+  const [newCategoryName, setNewCategoryName] = useState('')
 
   // ── Derived list ────────────────────────────────────────────────────────
   const displayed = useMemo(() => {
@@ -64,6 +84,8 @@ export default function UnitRates() {
     setEditTarget(null)
     setForm(EMPTY_FORM)
     setErrors({})
+    setIsAddingCategory(false)
+    setNewCategoryName('')
     setModalOpen(true)
   }
 
@@ -80,6 +102,8 @@ export default function UnitRates() {
       adjustUnitMH: row.adjustUnitMH ?? '',
     })
     setErrors({})
+    setIsAddingCategory(false)
+    setNewCategoryName('')
     setModalOpen(true)
   }
 
@@ -234,7 +258,7 @@ export default function UnitRates() {
           className="px-3 py-2 text-sm border border-slate-300 rounded-lg outline-none focus:border-blue-500 bg-white"
         >
           <option value="All">All Categories</option>
-          {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+          {allCategories.map(c => <option key={c} value={c}>{c}</option>)}
         </select>
         <span className="text-xs text-slate-400">{displayed.length} records</span>
       </div>
@@ -342,13 +366,73 @@ export default function UnitRates() {
         <div className="px-6 py-5 space-y-4">
           <div>
             <label className="block text-xs font-semibold text-slate-600 mb-1">Category</label>
-            <select
-              value={form.category}
-              onChange={e => setForm(p => ({ ...p, category: e.target.value }))}
-              className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-200 bg-white"
-            >
-              {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
+            {isAddingCategory ? (
+              <div className="flex items-center gap-2">
+                <input
+                  autoFocus
+                  type="text"
+                  value={newCategoryName}
+                  onChange={e => setNewCategoryName(e.target.value)}
+                  placeholder="New Category Name"
+                  className="flex-1 px-3 py-2 text-sm border border-slate-300 rounded-lg outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-200"
+                />
+                <button
+                  onClick={async () => {
+                    const cleanName = newCategoryName.trim()
+                    if (cleanName) {
+                      await addUnitRateCategory(cleanName)
+                      setForm(p => ({ ...p, category: cleanName }))
+                    }
+                    setIsAddingCategory(false)
+                    setNewCategoryName('')
+                  }}
+                  className="px-3 py-2 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors"
+                >
+                  Save
+                </button>
+                <button
+                  onClick={() => {
+                    setIsAddingCategory(false)
+                    setNewCategoryName('')
+                  }}
+                  className="px-3 py-2 text-sm font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <select
+                  value={form.category}
+                  onChange={e => setForm(p => ({ ...p, category: e.target.value }))}
+                  className="flex-1 px-3 py-2 text-sm border border-slate-300 rounded-lg outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-200 bg-white"
+                >
+                  {allCategories.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+                {!CATEGORIES.includes(form.category) && (
+                  <button
+                    onClick={async () => {
+                      if (window.confirm(`ลบ Category "${form.category}" ออกจากระบบ?`))
+                      {
+                        await deleteUnitRateCategory(form.category)
+                        setForm(p => ({ ...p, category: CATEGORIES[0] }))
+                      }
+                    }}
+                    className="p-1.5 border border-red-200 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                    title="Delete this category"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                )}
+                <button
+                  onClick={() => setIsAddingCategory(true)}
+                  className="p-1.5 border border-slate-300 text-slate-500 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                  title="Add new category"
+                >
+                  <Plus size={18} />
+                </button>
+              </div>
+            )}
           </div>
 
           {field('task', 'Task Name')}

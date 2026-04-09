@@ -1,8 +1,10 @@
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useEffect } from 'react'
 import {
   Plus, Pencil, Eye, Search, CalendarDays,
-  CheckCircle, PlayCircle, AlertTriangle, Rocket, Trash2, RotateCcw,
+  CheckCircle, PlayCircle, AlertTriangle, Rocket, Trash2, RotateCcw, UserCheck
 } from 'lucide-react'
+import { collection, onSnapshot } from 'firebase/firestore'
+import { db as authDb } from '../firebase/firebaseAuth'
 import { useApp } from '../context/AppContext'
 import { useAuth } from '../context/AuthContext'
 import Modal from '../components/ui/Modal'
@@ -22,10 +24,19 @@ function formatIDR(v) {
 
 // ── Schedule Set Modal (ppeLead / ppeManager / ppeAdmin) ─────────────────────
 
-function ScheduleModal({ wo, onSave, onClose }) {
+function ScheduleModal({ wo, ppeTeamUsers, onSave, onClose }) {
   const [planStart,  setPlanStart]  = useState(wo.planStart  || '')
   const [planFinish, setPlanFinish] = useState(wo.planFinish || '')
+  const [mheRows, setMheRows] = useState(wo.mheRows || wo.wbsItems || [])
   const [errors, setErrors] = useState({})
+
+  const roHasCat  = mheRows.some(r => r.category)
+  const roHasTask = mheRows.some(r => r.task)
+  const roHasDiff = mheRows.some(r => r.difficulty)
+
+  const updateRowEngineer = (idx, engName) => {
+    setMheRows(prev => prev.map((r, i) => i === idx ? { ...r, assignEngineer: engName } : r))
+  }
 
   const validate = () => {
     const e = {}
@@ -36,34 +47,112 @@ function ScheduleModal({ wo, onSave, onClose }) {
     return Object.keys(e).length === 0
   }
 
-  return (
-    <div className="px-6 py-5 space-y-4">
-      <div className="bg-slate-50 rounded-lg border border-slate-200 p-4 space-y-1">
-        <p className="text-xs text-slate-500 font-medium">Work Order</p>
-        <p className="font-bold text-[#0f2035]">{wo.requestWorkNo}</p>
-        <p className="text-sm text-slate-600">{wo.client}</p>
-      </div>
+  const handleSave = () => {
+    if (!validate()) return
 
-      <div className="grid grid-cols-2 gap-4">
+    // Derive assignedTeam exactly as UIDs based on the selected engineer names across all rows
+    const assignedNames = [...new Set(mheRows.map(r => r.assignEngineer).filter(Boolean))]
+    const assignedTeamUids = assignedNames.map(name => {
+      const user = ppeTeamUsers.find(u => u.name === name)
+      return user ? user.id : null
+    }).filter(Boolean)
+
+    onSave({ 
+      planStart, 
+      planFinish, 
+      mheRows, 
+      assignedTeam: assignedTeamUids, 
+      status: 'Ongoing' 
+    })
+  }
+
+  return (
+    <div className="px-6 py-5 space-y-5">
+      <div className="grid grid-cols-3 gap-4">
+        <div className="bg-slate-50 rounded-xl border border-slate-200 p-4 space-y-1">
+          <p className="text-xs text-slate-500 font-medium">Work Order</p>
+          <p className="font-bold text-[#0f2035]">{wo.requestWorkNo}</p>
+          <p className="text-sm text-slate-600 truncate" title={wo.client}>{wo.client}</p>
+        </div>
         <div>
-          <label className="block text-xs font-semibold text-slate-600 mb-1">Plan Start Date</label>
+          <label className="block text-xs font-semibold text-slate-600 mb-1">Plan Start Date <span className="text-red-500">*</span></label>
           <input type="date" value={planStart} onChange={e => setPlanStart(e.target.value)}
-            className={`w-full px-3 py-2 text-sm border rounded-lg outline-none transition-colors ${errors.planStart ? 'border-red-400 bg-red-50' : 'border-slate-300 focus:border-blue-500 focus:ring-1 focus:ring-blue-200'}`} />
+            className={`w-full px-3 py-2 text-sm border rounded-xl outline-none transition-colors focus:ring-2 focus:ring-blue-100 ${errors.planStart ? 'border-red-400 bg-red-50 focus:border-red-500' : 'border-slate-300 focus:border-blue-500 bg-white'}`} />
           {errors.planStart && <p className="text-xs text-red-500 mt-1">{errors.planStart}</p>}
         </div>
         <div>
-          <label className="block text-xs font-semibold text-slate-600 mb-1">Plan Finish Date</label>
+          <label className="block text-xs font-semibold text-slate-600 mb-1">Plan Finish Date <span className="text-red-500">*</span></label>
           <input type="date" value={planFinish} onChange={e => setPlanFinish(e.target.value)}
-            className={`w-full px-3 py-2 text-sm border rounded-lg outline-none transition-colors ${errors.planFinish ? 'border-red-400 bg-red-50' : 'border-slate-300 focus:border-blue-500 focus:ring-1 focus:ring-blue-200'}`} />
+            className={`w-full px-3 py-2 text-sm border rounded-xl outline-none transition-colors focus:ring-2 focus:ring-blue-100 ${errors.planFinish ? 'border-red-400 bg-red-50 focus:border-red-500' : 'border-slate-300 focus:border-blue-500 bg-white'}`} />
           {errors.planFinish && <p className="text-xs text-red-500 mt-1">{errors.planFinish}</p>}
         </div>
       </div>
 
-      <div className="flex justify-end gap-3 pt-2 border-t border-slate-100">
-        <button onClick={onClose} className="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg">Cancel</button>
-        <button onClick={() => validate() && onSave({ planStart, planFinish, status: 'Ongoing' })}
-          className="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg flex items-center gap-2">
-          <PlayCircle size={15} /> Set Schedule & Start
+      {/* Target Plan Table */}
+      <div className="space-y-2">
+        <p className="text-xs font-bold text-slate-700 uppercase tracking-wider">Original Plan: Table A — Direct Cost</p>
+        <div className="overflow-x-auto rounded-xl border border-slate-200 shadow-sm max-h-[50vh]">
+          <table className="w-full text-xs text-left whitespace-nowrap">
+            <thead className="bg-slate-100/80 text-slate-600 sticky top-0 z-10 shadow-sm">
+              <tr>
+                <th className="px-3 py-2.5 font-semibold text-center w-12 border-b border-slate-200">#</th>
+                <th className="px-3 py-2.5 font-semibold text-left border-b border-slate-200">Activity Name</th>
+                {roHasCat && <th className="px-3 py-2.5 font-semibold text-left border-b border-slate-200">Category</th>}
+                {roHasTask && <th className="px-3 py-2.5 font-semibold text-left border-b border-slate-200">Task</th>}
+                {roHasDiff && <th className="px-3 py-2.5 font-semibold text-left border-b border-slate-200">Difficulty Level</th>}
+                <th className="px-3 py-2.5 font-semibold text-right border-b border-slate-200">Qty</th>
+                <th className="px-3 py-2.5 font-semibold text-right border-b border-slate-200">Unit MH</th>
+                <th className="px-3 py-2.5 font-semibold text-right border-b border-slate-200">Total MH</th>
+                <th className="px-3 py-2.5 font-bold text-blue-700 bg-blue-50/50 border-b border-blue-100 shadow-[inset_1px_0_0_0_#dbeafe]">Assign Engineer</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {mheRows.length === 0 ? (
+                <tr><td colSpan={10} className="px-4 py-8 text-center text-slate-400">No data</td></tr>
+              ) : mheRows.map((row, idx) => (
+                <tr key={idx} className="hover:bg-slate-50/50 transition-colors bg-white">
+                  <td className="px-3 py-2.5 text-center text-slate-400">{idx + 1}</td>
+                  <td className="px-3 py-2.5 font-medium text-slate-800">{row.activityName}</td>
+                  {roHasCat && <td className="px-3 py-2.5 text-slate-600">{row.category || '—'}</td>}
+                  {roHasTask && <td className="px-3 py-2.5 text-slate-600">{row.task || '—'}</td>}
+                  {roHasDiff && <td className="px-3 py-2.5 text-slate-600">{row.difficulty || '—'}</td>}
+                  <td className="px-3 py-2.5 text-right tabular-nums text-slate-600">{row.qty || 0}</td>
+                  <td className="px-3 py-2.5 text-right tabular-nums text-slate-600">{row.unitMH || 0}</td>
+                  <td className="px-3 py-2.5 text-right tabular-nums font-semibold text-[#0f2035]">{row.totalMH || 0}</td>
+                  <td className="px-2 py-1.5 bg-blue-50/20 border-l border-blue-50">
+                    <select
+                      value={row.assignEngineer || ''}
+                      onChange={e => updateRowEngineer(idx, e.target.value)}
+                      className={`w-full max-w-[180px] p-2 text-xs border rounded-lg outline-none focus:ring-2 focus:ring-blue-100 transition-colors ${row.assignEngineer ? 'border-blue-300 focus:border-blue-500 bg-blue-50 text-blue-800 font-medium' : 'border-slate-300 focus:border-blue-400 bg-white text-slate-500'}`}
+                    >
+                      <option value="">— Select ppeTeam —</option>
+                      {ppeTeamUsers.map(u => (
+                        <option key={u.id} value={u.name}>{u.name}</option>
+                      ))}
+                    </select>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            {mheRows.length > 0 && (
+              <tfoot className="bg-slate-50 border-t-2 border-slate-200">
+                <tr>
+                  <td colSpan={(roHasCat?1:0)+(roHasTask?1:0)+(roHasDiff?1:0) + 4} className="px-3 py-2.5 text-right font-bold text-slate-600">Total:</td>
+                  <td className="px-3 py-2.5 text-right font-bold text-slate-800">{mheRows.reduce((sum, r) => sum + (parseFloat(r.totalMH)||0), 0)}</td>
+                  <td></td>
+                </tr>
+              </tfoot>
+            )}
+          </table>
+        </div>
+        <p className="text-[10px] text-slate-400">Note: Leave row unassigned if not required yet. Assigned engineers will automatically receive Work Orders in their Daily Report queue.</p>
+      </div>
+
+      <div className="flex justify-end gap-3 pt-3 border-t border-slate-100">
+        <button onClick={onClose} className="px-5 py-2.5 text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors">Cancel</button>
+        <button onClick={handleSave}
+          className="px-5 py-2.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-xl flex items-center gap-2 transition-colors shadow-sm">
+          <PlayCircle size={16} /> Set Schedule & Start
         </button>
       </div>
     </div>
@@ -201,8 +290,11 @@ function WODetailModal({ wo, dailyReports, teamRates, onClose }) {
 
 // ── Work Progress Report Modal ───────────────────────────────────────────────
 
-function WorkProgressModal({ wo, reports, onClose }) {
-  const activityRows = wo.mheRows || wo.wbsItems || []
+function WorkProgressModal({ wo, reports, isPpeTeam, myUid, myFullName, onClose }) {
+  const allRows = wo.mheRows || wo.wbsItems || []
+  const activityRows = isPpeTeam 
+    ? allRows.filter(r => r.assignEngineer && (r.assignEngineer === myFullName || r.assignEngineer === myUid))
+    : allRows
 
   // Latest accepted activity status per activity+engineer (what ppeLead reviewed)
   const acceptedDrs = useMemo(
@@ -337,6 +429,21 @@ export default function WorkOrders() {
   const [search, setSearch]             = useState('')
   const [filterStatus, setFilterStatus] = useState('All')
   const [activeModal, setActiveModal]   = useState(null) // { type, wo }
+  const [ppeTeamUsers, setPpeTeamUsers] = useState([])
+
+  useEffect(() => {
+    const ref = collection(authDb, 'PPE System', 'root', 'users')
+    const unsub = onSnapshot(ref, snap => {
+      const users = snap.docs.map(d => d.data())
+      setPpeTeamUsers(
+        users
+          .filter(u => u.status === 'approved' && (u.role || []).includes('ppeTeam'))
+          .map(u => ({ id: u.uid, name: `${u.firstName} ${u.lastName}`.trim(), position: u.position || '' }))
+          .sort((a, b) => a.name.localeCompare(b.name))
+      )
+    })
+    return unsub
+  }, [])
 
   const canActivate    = userHasRole(['ppeLead', 'ppeManager', 'ppeAdmin', 'MasterAdmin', 'GM/MD'])
   const isSuperAdmin   = userHasRole(['ppeAdmin', 'MasterAdmin'])
@@ -630,9 +737,9 @@ export default function WorkOrders() {
 
       {/* Schedule / Start Work Modal */}
       <Modal isOpen={activeModal?.type === 'schedule'} onClose={closeModal}
-        title={`Start Work — ${activeModal?.wo?.requestWorkNo || ''}`} size="sm">
+        title={`Start Work — ${activeModal?.wo?.requestWorkNo || ''}`} size="5xl">
         {activeModal?.wo && (
-          <ScheduleModal wo={activeModal.wo} onClose={closeModal}
+          <ScheduleModal wo={activeModal.wo} ppeTeamUsers={ppeTeamUsers} onClose={closeModal}
             onSave={(data) => { updateWorkOrder(activeModal.wo.id, data); closeModal() }} />
         )}
       </Modal>
@@ -641,7 +748,14 @@ export default function WorkOrders() {
       <Modal isOpen={activeModal?.type === 'progress'} onClose={closeModal}
         title={`Work Progress Report — ${activeModal?.wo?.requestWorkNo || ''}`} size="xl">
         {activeModal?.wo && (
-          <WorkProgressModal wo={activeModal.wo} reports={dailyReports} onClose={closeModal} />
+          <WorkProgressModal 
+            wo={activeModal.wo} 
+            reports={dailyReports} 
+            isPpeTeam={isPpeTeamOnly}
+            myUid={myUid}
+            myFullName={myFullName}
+            onClose={closeModal} 
+          />
         )}
       </Modal>
 

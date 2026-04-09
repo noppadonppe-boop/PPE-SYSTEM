@@ -16,7 +16,8 @@ import ConfirmDialog from '../components/ui/ConfirmDialog'
 const DR_STATUS_CFG = {
   'Submitted':        { cls: 'bg-blue-100 text-blue-700',    label: 'Submitted' },
   'Accepted':         { cls: 'bg-green-100 text-green-700',  label: 'Accepted' },
-  'Needs Correction': { cls: 'bg-red-100 text-red-700',      label: 'Needs Correction' },
+  'Needs Correction': { cls: 'bg-slate-200 text-slate-700',  label: 'Draft' },
+  'Draft':            { cls: 'bg-slate-200 text-slate-700',  label: 'Draft' },
   'Resubmitted':      { cls: 'bg-purple-100 text-purple-700',label: 'Resubmitted' },
   'Leave':            { cls: 'bg-orange-100 text-orange-700',label: 'Leave / Absent' },
   'Not Submitted':    { cls: 'bg-slate-100 text-slate-500',  label: 'Not Submitted' },
@@ -63,21 +64,20 @@ function DailyReportForm({ workOrder, teamRates, ppeTeamUsers, existingReports, 
   }
 
   const initActivityRows = (uid, existingRows) => {
-    if (existingRows && existingRows.length > 0) return existingRows
-
     // Resolve reporter name for matching assignEngineer
     const userEntry   = ppeTeamUsers.find(u => u.id === uid)
     const legacyEntry = teamRates.find(t => t.id === uid)
     const rName       = userEntry?.name || legacyEntry?.name || ''
 
-    // Filter only rows assigned to this user (or unassigned rows)
-    const myRows = uid
-      ? allMheRows.filter(r =>
-          !r.assignEngineer ||
-          r.assignEngineer === rName ||
-          r.assignEngineer === uid
-        )
-      : allMheRows
+    // Helper to check if a row belongs to the user
+    const isMyRow = (r) => r.assignEngineer && (r.assignEngineer === rName || r.assignEngineer === uid)
+
+    if (existingRows && existingRows.length > 0) {
+      return uid ? existingRows.filter(isMyRow) : existingRows
+    }
+
+    // Filter only rows assigned to this user
+    const myRows = uid ? allMheRows.filter(isMyRow) : allMheRows
 
     return myRows.map(r => ({
       id:             r.id || r.activityName || Math.random().toString(36).slice(2),
@@ -158,13 +158,24 @@ function DailyReportForm({ workOrder, teamRates, ppeTeamUsers, existingReports, 
       isLeaveAbsent:      form.isLeaveAbsent,
       notes:              form.notes.trim(),
       activityRows:       actRows,
-      drStatus:           form.isLeaveAbsent ? 'Leave' : 'Submitted',
+      drStatus:           form.isLeaveAbsent ? 'Leave' : (['Needs Correction', 'Draft'].includes(editTarget?.drStatus) ? 'Resubmitted' : 'Submitted'),
       reviewNote:         '',
     })
   }
 
   return (
     <div className="px-5 py-4 space-y-4 max-h-[85vh] overflow-y-auto">
+      {/* Needs Correction Message */}
+      {['Needs Correction', 'Draft'].includes(editTarget?.drStatus) && editTarget?.reviewNote && (
+        <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-3 flex gap-2.5 text-sm text-red-800 shadow-sm animate-pulse">
+          <MessageSquare size={16} className="mt-0.5 flex-shrink-0 text-red-600" />
+          <div>
+            <p className="font-bold text-[10px] uppercase tracking-wider mb-0.5 text-red-700">ppeLead Review: Needs Correction</p>
+            <p className="font-medium">{editTarget.reviewNote}</p>
+          </div>
+        </div>
+      )}
+
       {/* WO Banner */}
       <div className="bg-slate-50 rounded-lg border border-slate-200 p-3 flex items-center justify-between">
         <div>
@@ -379,7 +390,10 @@ function DRDetailModal({ dr: initialDr, allDrs = [], teamRates, ppeTeamUsers, wo
     if (user) return user.name
     return teamRates.find(t => t.id === id)?.name || id
   }
-  const actRows  = dr.activityRows || []
+  const reporterName = resolveReporter(dr.submittedBy)
+  const actRows = (dr.activityRows || []).filter(r => 
+    r.assignEngineer && (r.assignEngineer === reporterName || r.assignEngineer === dr.submittedBy)
+  )
 
   return (
     <div className="px-5 py-4 space-y-4 max-h-[85vh] overflow-y-auto">
@@ -517,12 +531,15 @@ function ReviewModal({ dr, teamRates, ppeTeamUsers, workOrder, onReview, onClose
     if (user) return user.name
     return teamRates.find(t => t.id === id)?.name || id
   }
-  const actRows  = dr.activityRows || []
+  const reporterName = resolveReporter(dr.submittedBy)
+  const actRows = (dr.activityRows || []).filter(r => 
+    r.assignEngineer && (r.assignEngineer === reporterName || r.assignEngineer === dr.submittedBy)
+  )
 
   const handleSubmit = () => {
     if (!action) return
     onReview({
-      drStatus:   action === 'accept' ? 'Accepted' : 'Needs Correction',
+      drStatus:   action === 'accept' ? 'Accepted' : 'Draft',
       reviewNote: note.trim(),
     })
   }
@@ -786,7 +803,9 @@ export default function DailyReport() {
             drStatus: 'Leave',
           })
         } else {
-          const actRows = dr.activityRows || []
+          const actRows = (dr.activityRows || []).filter(r => 
+            r.assignEngineer && (r.assignEngineer === reporterName || r.assignEngineer === dr.submittedBy)
+          )
           if (actRows.length === 0) {
             rows.push({
               date: dr.reportDate, reporter: reporterName,
@@ -954,8 +973,15 @@ export default function DailyReport() {
                         <td className="px-4 py-1.5 text-right tabular-nums text-slate-600">{dr.isLeaveAbsent ? '—' : dr.spentMHToday}</td>
                         <td className={`px-4 py-1.5 text-right font-bold tabular-nums ${dr.balanceMH < 0 ? 'text-red-600' : dr.balanceMH < 30 ? 'text-yellow-600' : 'text-green-700'}`}>{dr.balanceMH}</td>
                         <td className="px-4 py-1.5">
-                          <div className="flex flex-col gap-1">
-                            <DRStatusBadge status={drSt} />
+                          <div className="flex flex-col gap-1 w-32">
+                            <div className="flex justify-start">
+                              <DRStatusBadge status={drSt} />
+                            </div>
+                            {['Needs Correction', 'Draft'].includes(drSt) && dr.reviewNote && (
+                              <span className="text-[10px] text-red-600 font-medium leading-tight">
+                                แก้ไข: {dr.reviewNote}
+                              </span>
+                            )}
                             {pendingDr && (
                               <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[9px] font-semibold bg-orange-100 text-orange-600 border border-orange-200 whitespace-nowrap">
                                 <span className="w-1.5 h-1.5 rounded-full bg-orange-400 animate-pulse flex-shrink-0" />
@@ -973,13 +999,13 @@ export default function DailyReport() {
                               </button>
                             )}
                             {/* Show edit button based on the pending report if exists, else current dr */}
-                            {canSubmit && pendingDr && ['Needs Correction','Not Submitted','Submitted','Resubmitted'].includes(pendingDr.drStatus) && (
+                            {canSubmit && pendingDr && ['Needs Correction','Draft','Not Submitted','Submitted','Resubmitted'].includes(pendingDr.drStatus) && (
                               <button onClick={() => openModal('edit', pendingDr)} title="Edit pending report"
                                 className="p-1.5 rounded-lg text-orange-400 hover:text-blue-600 hover:bg-blue-50 transition-colors">
                                 <Pencil size={15} />
                               </button>
                             )}
-                            {canSubmit && !pendingDr && ['Needs Correction','Not Submitted'].includes(drSt) && (
+                            {canSubmit && !pendingDr && ['Needs Correction','Draft','Not Submitted'].includes(drSt) && (
                               <button onClick={() => openModal('edit', dr)} title="Edit / Resubmit"
                                 className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors">
                                 <Pencil size={15} />

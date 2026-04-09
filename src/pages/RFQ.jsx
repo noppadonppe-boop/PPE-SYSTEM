@@ -4,7 +4,7 @@ import {
   Calculator, Users, DollarSign, ClipboardList, FileText,
   ChevronRight, InboxIcon, ClipboardCheck, BadgeCheck,
   Pencil, Link2, Upload, Image, MessageSquare, Download, FileUp, Save,
-  Loader2, ZoomIn, Calendar,
+  Loader2, ZoomIn, Calendar, AlertTriangle, RotateCcw,
 } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import { useApp } from '../context/AppContext'
@@ -1137,23 +1137,42 @@ function Stage2Form({ rfq, onSave, onSaveDraft, onClose }) {
     overheadAmount,
     grandTotal,
     status: targetStatus,
+    // Clear rejection flags when submitting to Cost Estimate
+    ...(targetStatus === 'Pending Manager' ? { costRejected: false, costRejectNote: '', costRejectedAt: '' } : {}),
   })
 
   const [draftSaving, setDraftSaving] = useState(false)
+  const [draftSaved,  setDraftSaved]  = useState(false)
 
   const handleSaveDraft = async () => {
     if (!onSaveDraft) return
     setDraftSaving(true)
     try {
+      // Auto-merge any active row edit buffer so totalPlannedMH is always current
+      let latestRows = rows
+      if (editingId && editBuf.id) {
+        latestRows = rows.map(r => r.id === editingId ? { ...editBuf } : r)
+        setRows(latestRows)
+        setEditingId(null)
+        setEditBuf({})
+      }
+      const freshTotalMH = latestRows.reduce((s, r) => s + (r.totalMH || 0), 0)
+      const freshDirectCost = latestRows.reduce((s, r) => s + (r.totalCost || 0), 0)
+      const freshOverheadAmt = +(( freshDirectCost + totalIndirectCost) * (overheadPct / 100)).toFixed(2)
+      const freshGrandTotal  = +( freshDirectCost + totalIndirectCost + freshOverheadAmt).toFixed(2)
+
       // Save ONLY the MHE data — never change the workflow status
-      const { mheNo: mn, dateStart: ds, dateCompletion: dc, mheRows: mr,
-              wbsItems: wi, indirectCostRows: icr, totalPlannedMH: tp,
-              totalDirectCost: tdc, totalIndirectCost: tic,
-              overheadPct: op, overheadAmount: oa, grandTotal: gt } = buildPayload(rfq.status)
-      await onSaveDraft({ mheNo: mn, dateStart: ds, dateCompletion: dc,
-                          mheRows: mr, wbsItems: wi, indirectCostRows: icr,
-                          totalPlannedMH: tp, totalDirectCost: tdc, totalIndirectCost: tic,
-                          overheadPct: op, overheadAmount: oa, grandTotal: gt })
+      const { mheNo: mn, dateStart: ds, dateCompletion: dc,
+              wbsItems: wi, indirectCostRows: icr,
+              overheadPct: op } = buildPayload(rfq.status)
+      await onSaveDraft({
+        mheNo: mn, dateStart: ds, dateCompletion: dc,
+        mheRows: latestRows, wbsItems: wi, indirectCostRows: icr,
+        totalPlannedMH: +freshTotalMH.toFixed(2),
+        totalDirectCost: +freshDirectCost.toFixed(2),
+        totalIndirectCost: +totalIndirectCost.toFixed(2),
+        overheadPct: op, overheadAmount: freshOverheadAmt, grandTotal: freshGrandTotal,
+      })
       setDraftSaved(true)
       setTimeout(() => setDraftSaved(false), 2500)
     } finally {
@@ -1163,6 +1182,34 @@ function Stage2Form({ rfq, onSave, onSaveDraft, onClose }) {
 
   return (
     <div className="px-6 py-5 space-y-5 max-h-[78vh] overflow-y-auto">
+
+      {/* ── Rejection Alert Banner (shown when Cost Estimate was rejected) ── */}
+      {rfq.costRejected && (
+        <div className="bg-red-50 border-2 border-red-300 rounded-xl px-4 py-4 space-y-3">
+          <div className="flex items-start gap-3">
+            <div className="w-8 h-8 rounded-full bg-red-100 border border-red-300 flex items-center justify-center flex-shrink-0 mt-0.5">
+              <AlertTriangle size={16} className="text-red-600" />
+            </div>
+            <div className="flex-1">
+              <p className="text-sm font-bold text-red-700 flex items-center gap-2">
+                Cost Estimate ถูก Reject — ต้องแก้ไขและส่งใหม่
+              </p>
+              {rfq.costRejectNote && (
+                <p className="mt-1 text-xs text-red-600 bg-white border border-red-200 rounded-lg px-3 py-2 leading-relaxed whitespace-pre-wrap">
+                  {rfq.costRejectNote}
+                </p>
+              )}
+              {rfq.costRejectedAt && (
+                <p className="text-[10px] text-red-400 mt-1">Rejected on: {rfq.costRejectedAt}</p>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-2 pt-1 border-t border-red-200">
+            <RotateCcw size={13} className="text-red-500" />
+            <p className="text-xs text-red-600 font-medium">แก้ไข Manhour Plan ด้านล่าง แล้วกด "Submit to Cost Estimate" เพื่อส่งใหม่</p>
+          </div>
+        </div>
+      )}
 
       {/* Header Info */}
       <div className="bg-slate-50 rounded-xl border border-slate-200 p-4">
@@ -1641,11 +1688,81 @@ function Stage2Form({ rfq, onSave, onSaveDraft, onClose }) {
   )
 }
 
+// ─── Reject Cost Estimate Modal ───────────────────────────────────────────────
+
+function RejectCostModal({ isOpen, rfq, onConfirm, onClose }) {
+  const [reason, setReason] = useState('')
+  const [err, setErr]       = useState('')
+  const [saving, setSaving] = useState(false)
+
+  // Reset when opened
+  React.useEffect(() => { if (isOpen) { setReason(''); setErr(''); setSaving(false) } }, [isOpen])
+
+  if (!isOpen || !rfq) return null
+
+  const handleConfirm = async () => {
+    if (!reason.trim()) { setErr('กรุณากรอกเหตุผลที่ Reject'); return }
+    setSaving(true)
+    try { await onConfirm(reason.trim()) }
+    finally { setSaving(false) }
+  }
+
+  return (
+    <div className="fixed inset-0 z-[999] bg-black/50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+        {/* Header */}
+        <div className="bg-red-600 px-5 py-4 flex items-center gap-3">
+          <div className="w-8 h-8 rounded-full bg-white/20 flex items-center justify-center">
+            <XCircle size={18} className="text-white" />
+          </div>
+          <div>
+            <p className="text-sm font-bold text-white">Reject Cost Estimate</p>
+            <p className="text-xs text-red-100 mt-0.5">{rfq.requestWorkNo}</p>
+          </div>
+        </div>
+        {/* Body */}
+        <div className="px-5 py-5 space-y-4">
+          <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-xs text-red-700">
+            <p className="font-semibold mb-1">⚠ รายการนี้จะถูกส่งกลับไปยังขั้นตอน Manhour Plan</p>
+            <p className="text-red-600">PPE Lead / Engineer จะได้รับแจ้งเตือนและต้องแก้ไขแล้วส่งใหม่อีกครั้ง</p>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              เหตุผลที่ Reject <span className="text-red-500">*</span>
+            </label>
+            <textarea
+              rows={4}
+              value={reason}
+              onChange={e => { setReason(e.target.value); setErr('') }}
+              placeholder="ระบุเหตุผลที่ไม่อนุมัติ Cost Estimate และสิ่งที่ต้องการให้แก้ไข…"
+              className={`w-full px-3 py-2 text-sm border rounded-xl outline-none resize-none transition-colors ${
+                err ? 'border-red-400 bg-red-50' : 'border-slate-300 focus:border-red-400 focus:ring-1 focus:ring-red-200'
+              }`}
+            />
+            {err && <p className="text-xs text-red-500 mt-1">{err}</p>}
+          </div>
+        </div>
+        {/* Footer */}
+        <div className="px-5 py-4 border-t border-slate-100 flex justify-between gap-3">
+          <button onClick={onClose} disabled={saving}
+            className="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg disabled:opacity-50">
+            ยกเลิก
+          </button>
+          <button onClick={handleConfirm} disabled={saving}
+            className="px-5 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg flex items-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed">
+            {saving ? <><Loader2 size={14} className="animate-spin" /> กำลังส่ง…</> : <><XCircle size={14} /> Reject & ส่งกลับ</>}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ─── Stage 3: Cost Estimate (ppeManager) ─────────────────────────────────────
 
 const EMPTY_INDIRECT = { item: '', description: '', unit: '', rate: '', qty: '', amount: 0, note: '' }
 
-function Stage3Form({ rfq, onSave, onSaveDraft, onClose, onCancel }) {
+function Stage3Form({ rfq, onSave, onSaveDraft, onClose, onCancel, onReject }) {
   const { unitRates, engStandardRates } = useApp()
 
   // Direct cost rows come from MHE rows — with all Stage 2 fields
@@ -1690,7 +1807,8 @@ function Stage3Form({ rfq, onSave, onSaveDraft, onClose, onCancel }) {
   })
   const [overheadPct, setOverheadPct] = useState(rfq.overheadPct ?? 15)
   const [submitNote, setSubmitNote]   = useState(rfq.costDraftNote || '')
-  const [showConfirmCancel, setShowConfirmCancel] = useState(false)
+  const [showConfirmCancel, setShowConfirmCancel]   = useState(false)
+  const [showConfirmReject, setShowConfirmReject]   = useState(false)
   const [draftSaved, setDraftSaved]   = useState(false)
   const [showQuotePreview, setShowQuotePreview] = useState(false)
 
@@ -1763,6 +1881,7 @@ function Stage3Form({ rfq, onSave, onSaveDraft, onClose, onCancel }) {
     directCostRows:   directRows,
     indirectCostRows: indirectRows,
     overheadPct,
+    totalPlannedMH:   +totalMH.toFixed(2),   // ← sync Plan MH column in table
     totalDirectCost:   totalDirect,
     totalIndirectCost: totalIndirect,
     totalCost:         grandTotal,
@@ -1783,6 +1902,22 @@ function Stage3Form({ rfq, onSave, onSaveDraft, onClose, onCancel }) {
     }
   }
 
+  // ── Conditional column visibility for Read-Only tables ──
+  const roHasCat = mheRows.some(r => r.category?.trim())
+  const roHasTask = mheRows.some(r => r.task?.trim())
+  const roHasDiff = mheRows.some(r => r.difficultyLevel && r.difficultyLevel !== 'AVG(Normal)')
+  const roHasAddInfo = mheRows.some(r => r.additionalInfo?.trim())
+  const roHasPos = mheRows.some(r => r.assignPosition?.trim())
+  const roHasNoteA = mheRows.some(r => r.note?.trim())
+  const colSpanA1 = 4 + (roHasCat?1:0) + (roHasTask?1:0) + (roHasDiff?1:0) + (roHasAddInfo?1:0)
+  const colSpanA2 = 1 + (roHasPos?1:0)
+
+  const indRows = rfq.indirectCostRows || []
+  const roHasDescB = indRows.some(r => r.description?.trim())
+  const roHasUnitB = indRows.some(r => r.unit?.trim())
+  const roHasNoteB = indRows.some(r => r.note?.trim())
+  const colSpanB1 = 4 + (roHasDescB?1:0) + (roHasUnitB?1:0)
+
   return (
     <div className="px-6 py-5 space-y-6 max-h-[80vh] overflow-y-auto">
 
@@ -1802,20 +1937,117 @@ function Stage3Form({ rfq, onSave, onSaveDraft, onClose, onCancel }) {
         </div>
       </div>
 
-      {/* Comment History (loop) */}
-      {commentHistory.length > 0 && (
-        <div className="space-y-2">
-          <p className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1"><MessageSquare size={12} /> Review Comment History</p>
-          <div className="space-y-2 max-h-32 overflow-y-auto">
-            {commentHistory.map((c, i) => (
-              <div key={i} className={`rounded-lg px-3 py-2 text-xs border ${c.role === 'ppeManager' ? 'bg-blue-50 border-blue-200' : 'bg-amber-50 border-amber-200'}`}>
-                <p className="font-semibold text-slate-600">{c.date}</p>
-                <p className="text-slate-700 mt-0.5">{c.note}</p>
-              </div>
-            ))}
+      {/* ── Read-Only Plan from Stage 2 ── */}
+      <div className="space-y-4">
+        <div>
+          <p className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-2 flex items-center gap-1">
+            <ClipboardList size={13} /> Original Plan: Table A — Direct Cost
+          </p>
+          <div className="overflow-x-auto rounded-xl border border-slate-200">
+            <table className="w-full text-xs" style={{ minWidth: 1200 }}>
+              <thead className="bg-slate-100 text-slate-600">
+                <tr>
+                  <th className="px-2 py-2.5 text-center font-semibold w-14">#</th>
+                  <th className="px-2 py-2.5 text-left font-semibold">Activity Name</th>
+                  {roHasCat && <th className="px-2 py-2.5 text-left font-semibold">Category</th>}
+                  {roHasTask && <th className="px-2 py-2.5 text-left font-semibold">Task</th>}
+                  {roHasDiff && <th className="px-2 py-2.5 text-left font-semibold">Difficulty Level</th>}
+                  {roHasAddInfo && <th className="px-2 py-2.5 text-left font-semibold">Additional Info</th>}
+                  <th className="px-2 py-2.5 text-right font-semibold">Qty</th>
+                  <th className="px-2 py-2.5 text-right font-semibold">Unit MH</th>
+                  <th className="px-2 py-2.5 text-right font-semibold">Total MH</th>
+                  {roHasPos && <th className="px-2 py-2.5 text-left font-semibold">Assign Position</th>}
+                  <th className="px-2 py-2.5 text-right font-semibold">Unit Rate/MH</th>
+                  <th className="px-2 py-2.5 text-right font-semibold">Total Cost</th>
+                  {roHasNoteA && <th className="px-2 py-2.5 text-left font-semibold">Note</th>}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {mheRows.length === 0 ? (
+                  <tr><td colSpan={13} className="px-3 py-4 text-center text-slate-400">No data</td></tr>
+                ) : mheRows.map((row, idx) => (
+                  <tr key={idx} className="hover:bg-slate-50 bg-white">
+                    <td className="px-2 py-2 text-center text-slate-400">{String(idx + 1).padStart(2, '0')}</td>
+                    <td className="px-2 py-2 font-medium">{row.activityName || row.task}</td>
+                    {roHasCat && <td className="px-2 py-2">{row.category}</td>}
+                    {roHasTask && <td className="px-2 py-2">{row.task}</td>}
+                    {roHasDiff && <td className="px-2 py-2">{row.difficultyLevel}</td>}
+                    {roHasAddInfo && <td className="px-2 py-2">{row.additionalInfo}</td>}
+                    <td className="px-2 py-2 text-right">{row.qty}</td>
+                    <td className="px-2 py-2 text-right">{row.unitMH}</td>
+                    <td className="px-2 py-2 text-right font-bold text-blue-700">{row.totalMH}</td>
+                    {roHasPos && <td className="px-2 py-2">{row.assignPosition}</td>}
+                    <td className="px-2 py-2 text-right">{row.unitRate}</td>
+                    <td className="px-2 py-2 text-right font-bold text-emerald-600">{row.totalCost > 0 ? row.totalCost.toLocaleString() : '—'}</td>
+                    {roHasNoteA && <td className="px-2 py-2 text-slate-500">{row.note}</td>}
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot className="bg-slate-100 border-t-2 border-slate-300">
+                <tr>
+                  <td colSpan={colSpanA1} className="px-3 py-2 font-bold text-slate-700 text-right text-xs">Total Manhours:</td>
+                  <td className="px-3 py-2 font-bold text-[#0f2035] text-right tabular-nums">
+                    {mheRows.reduce((s, r) => s + (parseFloat(r.totalMH)||0), 0).toFixed(2)}
+                  </td>
+                  <td colSpan={colSpanA2} className="px-3 py-2 font-bold text-slate-700 text-right text-xs">Total Direct Cost:</td>
+                  <td className="px-3 py-2 font-bold text-emerald-700 text-right tabular-nums">
+                    {mheRows.reduce((s, r) => s + (parseFloat(r.totalCost)||0), 0).toLocaleString()}
+                  </td>
+                  {roHasNoteA && <td></td>}
+                </tr>
+              </tfoot>
+            </table>
           </div>
         </div>
-      )}
+
+        {/* Read-Only Table B */}
+        {rfq.indirectCostRows && rfq.indirectCostRows.length > 0 && (
+          <div>
+            <p className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-2 flex items-center gap-1">
+              <DollarSign size={13} /> Original Plan: Table B — Indirect Cost
+            </p>
+            <div className="overflow-x-auto rounded-xl border border-slate-200">
+              <table className="w-full text-xs" style={{ minWidth: 700 }}>
+                <thead className="bg-slate-100 text-slate-600">
+                  <tr>
+                    <th className="px-3 py-2 text-center font-semibold w-14">#</th>
+                    <th className="px-3 py-2 text-left font-semibold">Item</th>
+                    {roHasDescB && <th className="px-3 py-2 text-left font-semibold">Description</th>}
+                    {roHasUnitB && <th className="px-3 py-2 text-left font-semibold">Unit</th>}
+                    <th className="px-3 py-2 text-right font-semibold">Rate</th>
+                    <th className="px-3 py-2 text-right font-semibold">Qty</th>
+                    <th className="px-3 py-2 text-right font-semibold">Amount</th>
+                    {roHasNoteB && <th className="px-3 py-2 text-left font-semibold">Note</th>}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {rfq.indirectCostRows.map((row, idx) => (
+                    <tr key={idx} className="hover:bg-slate-50 bg-white">
+                      <td className="px-3 py-2 text-center text-slate-400">{String(idx + 1).padStart(2, '0')}</td>
+                      <td className="px-3 py-2 font-medium">{row.item}</td>
+                      {roHasDescB && <td className="px-3 py-2">{row.description}</td>}
+                      {roHasUnitB && <td className="px-3 py-2">{row.unit}</td>}
+                      <td className="px-3 py-2 text-right">{row.rate}</td>
+                      <td className="px-3 py-2 text-right">{row.qty}</td>
+                      <td className="px-3 py-2 text-right font-bold text-emerald-600">{row.amount > 0 ? row.amount.toLocaleString() : '—'}</td>
+                      {roHasNoteB && <td className="px-3 py-2 text-slate-500">{row.note}</td>}
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot className="bg-slate-100 border-t-2 border-slate-300">
+                  <tr>
+                    <td colSpan={colSpanB1} className="px-3 py-2 font-bold text-slate-700 text-right text-xs">Total Indirect Cost:</td>
+                    <td className="px-3 py-2 font-bold text-emerald-700 text-right tabular-nums">
+                      {rfq.indirectCostRows.reduce((s, r) => s + (parseFloat(r.amount)||0), 0).toLocaleString()}
+                    </td>
+                    {roHasNoteB && <td></td>}
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Table A: Direct Cost */}
       <div>
@@ -2056,6 +2288,21 @@ function Stage3Form({ rfq, onSave, onSaveDraft, onClose, onCancel }) {
         </div>
       </div>
 
+      {/* Review Comment History (Moved to bottom) */}
+      {commentHistory.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1"><MessageSquare size={12} /> Review Comment History</p>
+          <div className="space-y-2 max-h-32 overflow-y-auto">
+            {commentHistory.map((c, i) => (
+              <div key={i} className={`rounded-lg px-3 py-2 text-xs border ${c.role === 'ppeManager' ? 'bg-blue-50 border-blue-200' : 'bg-amber-50 border-amber-200'}`}>
+                <p className="font-semibold text-slate-600">{c.date}</p>
+                <p className="text-slate-700 mt-0.5">{c.note}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Submit Note (required for submission / revision loop) */}
       <div>
         <label className="block text-xs font-semibold text-slate-600 mb-1">
@@ -2069,10 +2316,19 @@ function Stage3Form({ rfq, onSave, onSaveDraft, onClose, onCancel }) {
       </div>
 
       <div className="flex justify-between gap-3 pt-2 border-t border-slate-100 flex-wrap">
-        <button onClick={() => setShowConfirmCancel(true)} disabled={costSaving}
-          className="px-4 py-2 text-sm font-medium text-red-600 border border-red-200 bg-red-50 hover:bg-red-100 rounded-lg flex items-center gap-2 disabled:opacity-50">
-          <XCircle size={15} /> Cancel RFQ
-        </button>
+        <div className="flex gap-2 flex-wrap">
+          <button onClick={() => setShowConfirmCancel(true)} disabled={costSaving}
+            className="px-4 py-2 text-sm font-medium text-red-600 border border-red-200 bg-red-50 hover:bg-red-100 rounded-lg flex items-center gap-2 disabled:opacity-50">
+            <XCircle size={15} /> Cancel RFQ
+          </button>
+          {onReject && (
+            <button onClick={() => setShowConfirmReject(true)} disabled={costSaving}
+              className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg flex items-center gap-2 disabled:opacity-50"
+              title="Reject — ส่งกลับ Manhour Plan">
+              <XCircle size={15} /> Reject Cost Estimate
+            </button>
+          )}
+        </div>
         <div className="flex gap-3 flex-wrap">
           <button onClick={onClose} disabled={costSaving} className="px-4 py-2 text-sm font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg disabled:opacity-50">Close</button>
           <button onClick={() => setShowQuotePreview(true)} disabled={costSaving}
@@ -2118,6 +2374,20 @@ function Stage3Form({ rfq, onSave, onSaveDraft, onClose, onCancel }) {
         message="Are you sure you want to cancel this RFQ? This cannot be undone."
       />
 
+      {/* Reject-from-modal confirm dialog */}
+      {onReject && (
+        <RejectCostModal
+          isOpen={showConfirmReject}
+          rfq={rfq}
+          onClose={() => setShowConfirmReject(false)}
+          onConfirm={async (reason) => {
+            await onReject(reason)
+            setShowConfirmReject(false)
+            onClose()
+          }}
+        />
+      )}
+
       {/* Quotation Preview Overlay */}
       {showQuotePreview && (
         <QuotationPreview
@@ -2137,21 +2407,36 @@ function Stage3Form({ rfq, onSave, onSaveDraft, onClose, onCancel }) {
 
 // ─── Stage 4: Approval (Requestor / GM/MD) ───────────────────────────────────
 
-function Stage4Form({ rfq, onSave, onClose }) {
+function Stage4Form({ rfq, onSave, onClose, role }) {
   const [note, setNote]                         = useState('')
   const [showConfirmCancel, setShowConfirmCancel] = useState(false)
 
+  const canSeeCost = ['Requestor', 'GM/MD', 'ppeManager', 'ppeAdmin', 'MasterAdmin'].includes(role)
+
   const commentHistory = rfq.costComments || []
 
-  // MHE activity rows (prefer mheRows, fallback to wbsItems)
-  const activityRows = rfq.mheRows || rfq.wbsItems || []
   const directRows   = rfq.directCostRows || []
+  const indRows      = rfq.indirectCostRows || []
+
+  const roHasCat = directRows.some(r => r.category?.trim())
+  const roHasTask = directRows.some(r => r.task?.trim())
+  const roHasDiff = directRows.some(r => r.difficultyLevel && r.difficultyLevel !== 'AVG(Normal)')
+  const roHasAddInfo = directRows.some(r => r.additionalInfo?.trim())
+  const roHasPos = directRows.some(r => r.assignPosition?.trim())
+  const roHasNoteA = directRows.some(r => r.note?.trim())
+  const colSpanA1 = 4 + (roHasCat?1:0) + (roHasTask?1:0) + (roHasDiff?1:0) + (roHasAddInfo?1:0)
+  const colSpanA2 = 1 + (roHasPos?1:0)
+
+  const roHasDescB = indRows.some(r => r.description?.trim())
+  const roHasUnitB = indRows.some(r => r.unit?.trim())
+  const roHasNoteB = indRows.some(r => r.note?.trim())
+  const colSpanB1 = 4 + (roHasDescB?1:0) + (roHasUnitB?1:0)
 
   return (
     <div className="px-6 py-5 space-y-5 max-h-[80vh] overflow-y-auto">
 
       {/* Cost Summary Banner */}
-      <div className="grid grid-cols-3 gap-3">
+      <div className={`grid ${canSeeCost ? 'grid-cols-3' : 'grid-cols-2'} gap-3`}>
         <div className="bg-slate-50 rounded-xl border border-slate-200 p-3 text-center">
           <p className="text-xl font-bold text-[#0f2035]">{rfq.totalPlannedMH || 0}</p>
           <p className="text-xs text-slate-500 mt-0.5">Total MH</p>
@@ -2160,14 +2445,16 @@ function Stage4Form({ rfq, onSave, onClose }) {
           <p className="text-xl font-bold text-[#0f2035]">{rfq.mheNo || rfq.requestWorkNo}</p>
           <p className="text-xs text-slate-500 mt-0.5">MHE No.</p>
         </div>
-        <div className="bg-green-50 rounded-xl border border-green-200 p-3 text-center">
-          <p className="text-xl font-bold text-green-700">{(rfq.totalCost || 0).toLocaleString('th-TH')}</p>
-          <p className="text-xs text-slate-500 mt-0.5">Grand Total (Baht)</p>
-        </div>
+        {canSeeCost && (
+          <div className="bg-green-50 rounded-xl border border-green-200 p-3 text-center">
+            <p className="text-xl font-bold text-green-700">{(rfq.totalCost || 0).toLocaleString('th-TH')}</p>
+            <p className="text-xs text-slate-500 mt-0.5">Grand Total (Baht)</p>
+          </div>
+        )}
       </div>
 
       {/* B3.3 Cost Breakdown (read-only) */}
-      {(rfq.totalDirectCost > 0 || rfq.totalIndirectCost > 0) && (
+      {canSeeCost && (rfq.totalDirectCost > 0 || rfq.totalIndirectCost > 0) && (
         <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 space-y-2 text-xs">
           <p className="font-bold text-slate-700 uppercase tracking-wider mb-2">Table B3.3 — Cost Breakdown</p>
           <div className="flex justify-between">
@@ -2191,53 +2478,117 @@ function Stage4Form({ rfq, onSave, onClose }) {
         </div>
       )}
 
-      {/* Activity Summary (from MHE) */}
-      {activityRows.length > 0 && (
-        <div className="rounded-xl border border-slate-200 overflow-hidden">
-          <div className="bg-slate-100 px-3 py-2">
-            <p className="text-xs font-bold text-slate-600 uppercase tracking-wider">Work Activities (from Manhour Estimate)</p>
-          </div>
-          <table className="w-full text-xs">
-            <thead className="bg-slate-50 border-b border-slate-100">
-              <tr>
-                <th className="px-3 py-2 text-left text-slate-400 font-semibold">#</th>
-                <th className="px-3 py-2 text-left text-slate-400 font-semibold">Activity</th>
-                <th className="px-3 py-2 text-left text-slate-400 font-semibold">Type</th>
-                <th className="px-3 py-2 text-right text-slate-400 font-semibold">Qty</th>
-                <th className="px-3 py-2 text-right text-slate-400 font-semibold">Total MH</th>
-                <th className="px-3 py-2 text-left text-slate-400 font-semibold">Engineer</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {activityRows.map((w, i) => (
-                <tr key={w.id || i} className="hover:bg-slate-50">
-                  <td className="px-3 py-1.5 text-slate-400">{i+1}</td>
-                  <td className="px-3 py-1.5 font-medium text-slate-800">{w.activityName || w.task}</td>
-                  <td className="px-3 py-1.5 text-slate-500">{w.type || '—'}</td>
-                  <td className="px-3 py-1.5 text-right tabular-nums">{w.qty}</td>
-                  <td className="px-3 py-1.5 text-right font-semibold tabular-nums">{w.totalMH}</td>
-                  <td className="px-3 py-1.5 text-slate-500">{w.assignEngineer || '—'}</td>
+      {/* ── Updated Plan from Stage 3 ── */}
+      <div className="space-y-4">
+        <div>
+          <p className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-2 flex items-center gap-1">
+            <Calculator size={13} /> Updated Plan: Table A — Direct Cost
+          </p>
+          <div className="overflow-x-auto rounded-xl border border-slate-200">
+            <table className="w-full text-xs" style={{ minWidth: 1200 }}>
+              <thead className="bg-slate-100 text-slate-600">
+                <tr>
+                  <th className="px-2 py-2.5 text-center font-semibold w-14">#</th>
+                  <th className="px-2 py-2.5 text-left font-semibold">Activity Name</th>
+                  {roHasCat && <th className="px-2 py-2.5 text-left font-semibold">Category</th>}
+                  {roHasTask && <th className="px-2 py-2.5 text-left font-semibold">Task</th>}
+                  {roHasDiff && <th className="px-2 py-2.5 text-left font-semibold">Difficulty Level</th>}
+                  {roHasAddInfo && <th className="px-2 py-2.5 text-left font-semibold">Additional Info</th>}
+                  <th className="px-2 py-2.5 text-right font-semibold">Qty</th>
+                  <th className="px-2 py-2.5 text-right font-semibold">Unit MH</th>
+                  <th className="px-2 py-2.5 text-right font-semibold">Total MH</th>
+                  {roHasPos && <th className="px-2 py-2.5 text-left font-semibold">Assign Position</th>}
+                  <th className="px-2 py-2.5 text-right font-semibold">Unit Rate/MH</th>
+                  <th className="px-2 py-2.5 text-right font-semibold">Total Cost</th>
+                  {roHasNoteA && <th className="px-2 py-2.5 text-left font-semibold">Note</th>}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {/* Comment History */}
-      {commentHistory.length > 0 && (
-        <div className="space-y-2">
-          <p className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1"><MessageSquare size={12} /> Review Comment History</p>
-          <div className="space-y-2 max-h-36 overflow-y-auto">
-            {commentHistory.map((c, i) => (
-              <div key={i} className={`rounded-lg px-3 py-2 text-xs border ${c.role === 'ppeManager' ? 'bg-blue-50 border-blue-200' : 'bg-amber-50 border-amber-200'}`}>
-                <p className="font-semibold text-slate-600">{c.date}</p>
-                <p className="text-slate-700 mt-0.5">{c.note}</p>
-              </div>
-            ))}
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {directRows.length === 0 ? (
+                  <tr><td colSpan={13} className="px-3 py-4 text-center text-slate-400">No data</td></tr>
+                ) : directRows.map((row, idx) => (
+                  <tr key={idx} className="hover:bg-slate-50 bg-white">
+                    <td className="px-2 py-2 text-center text-slate-400">{String(idx + 1).padStart(2, '0')}</td>
+                    <td className="px-2 py-2 font-medium">{row.activityName || row.task}</td>
+                    {roHasCat && <td className="px-2 py-2">{row.category}</td>}
+                    {roHasTask && <td className="px-2 py-2">{row.task}</td>}
+                    {roHasDiff && <td className="px-2 py-2">{row.difficultyLevel}</td>}
+                    {roHasAddInfo && <td className="px-2 py-2">{row.additionalInfo}</td>}
+                    <td className="px-2 py-2 text-right">{row.qty}</td>
+                    <td className="px-2 py-2 text-right">{row.unitMH}</td>
+                    <td className="px-2 py-2 text-right font-bold text-blue-700">{row.totalMH}</td>
+                    {roHasPos && <td className="px-2 py-2">{row.assignPosition}</td>}
+                    <td className="px-2 py-2 text-right">{row.unitRate}</td>
+                    <td className="px-2 py-2 text-right font-bold text-emerald-600">{row.totalCost > 0 ? row.totalCost.toLocaleString() : '—'}</td>
+                    {roHasNoteA && <td className="px-2 py-2 text-slate-500">{row.note}</td>}
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot className="bg-slate-100 border-t-2 border-slate-300">
+                <tr>
+                  <td colSpan={colSpanA1} className="px-3 py-2 font-bold text-slate-700 text-right text-xs">Total Manhours:</td>
+                  <td className="px-3 py-2 font-bold text-[#0f2035] text-right tabular-nums">
+                    {directRows.reduce((s, r) => s + (parseFloat(r.totalMH)||0), 0).toFixed(2)}
+                  </td>
+                  <td colSpan={colSpanA2} className="px-3 py-2 font-bold text-slate-700 text-right text-xs">Total Direct Cost:</td>
+                  <td className="px-3 py-2 font-bold text-emerald-700 text-right tabular-nums">
+                    {directRows.reduce((s, r) => s + (parseFloat(r.totalCost)||0), 0).toLocaleString()}
+                  </td>
+                  {roHasNoteA && <td></td>}
+                </tr>
+              </tfoot>
+            </table>
           </div>
         </div>
-      )}
+
+        {/* Read-Only Table B */}
+        {indRows.length > 0 && (
+          <div>
+            <p className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-2 flex items-center gap-1">
+              <DollarSign size={13} /> Updated Plan: Table B — Indirect Cost
+            </p>
+            <div className="overflow-x-auto rounded-xl border border-slate-200">
+              <table className="w-full text-xs" style={{ minWidth: 700 }}>
+                <thead className="bg-slate-100 text-slate-600">
+                  <tr>
+                    <th className="px-3 py-2 text-center font-semibold w-14">#</th>
+                    <th className="px-3 py-2 text-left font-semibold">Item</th>
+                    {roHasDescB && <th className="px-3 py-2 text-left font-semibold">Description</th>}
+                    {roHasUnitB && <th className="px-3 py-2 text-left font-semibold">Unit</th>}
+                    <th className="px-3 py-2 text-right font-semibold">Rate</th>
+                    <th className="px-3 py-2 text-right font-semibold">Qty</th>
+                    <th className="px-3 py-2 text-right font-semibold">Amount</th>
+                    {roHasNoteB && <th className="px-3 py-2 text-left font-semibold">Note</th>}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {indRows.map((row, idx) => (
+                    <tr key={idx} className="hover:bg-slate-50 bg-white">
+                      <td className="px-3 py-2 text-center text-slate-400">{String(idx + 1).padStart(2, '0')}</td>
+                      <td className="px-3 py-2 font-medium">{row.item}</td>
+                      {roHasDescB && <td className="px-3 py-2">{row.description}</td>}
+                      {roHasUnitB && <td className="px-3 py-2">{row.unit}</td>}
+                      <td className="px-3 py-2 text-right">{row.rate}</td>
+                      <td className="px-3 py-2 text-right">{row.qty}</td>
+                      <td className="px-3 py-2 text-right font-bold text-emerald-600">{row.amount > 0 ? row.amount.toLocaleString() : '—'}</td>
+                      {roHasNoteB && <td className="px-3 py-2 text-slate-500">{row.note}</td>}
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot className="bg-slate-100 border-t-2 border-slate-300">
+                  <tr>
+                    <td colSpan={colSpanB1} className="px-3 py-2 font-bold text-slate-700 text-right text-xs">Total Indirect Cost:</td>
+                    <td className="px-3 py-2 font-bold text-emerald-700 text-right tabular-nums">
+                      {indRows.reduce((s, r) => s + (parseFloat(r.amount)||0), 0).toLocaleString()}
+                    </td>
+                    {roHasNoteB && <td></td>}
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Note (required for any action) */}
       <div>
@@ -2541,7 +2892,7 @@ function StatusPill({ status }) {
   )
 }
 
-function RFQTable({ rows, onAction, onDetail, onEdit, onDelete, actionLabel, actionColor, emptyMsg, canEdit, showEditDelete, isMasterAdmin, role, canEditRow, canDeleteRow }) {
+function RFQTable({ rows, onAction, onDetail, onEdit, onDelete, onReject, actionLabel, actionColor, emptyMsg, canEdit, showEditDelete, isMasterAdmin, role, canEditRow, canDeleteRow }) {
   const showCost = ['ppeManager', 'ppeAdmin', 'MasterAdmin', 'GM/MD'].includes(role)
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState('All')
@@ -2656,6 +3007,16 @@ function RFQTable({ rows, onAction, onDetail, onEdit, onDelete, actionLabel, act
                           </button>
                         )
                       )}
+                      {/* Reject button — shown only when onReject is provided and row is Pending Manager */}
+                      {onReject && rfq.status === 'Pending Manager' && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); onReject(rfq) }}
+                          className="px-2.5 py-1.5 text-xs font-semibold text-white bg-red-500 hover:bg-red-600 rounded-lg transition-colors flex items-center gap-1"
+                          title="Reject — ส่งกลับ Manhour Plan"
+                        >
+                          <XCircle size={12} /> Reject
+                        </button>
+                      )}
                       <button onClick={(e) => { e.stopPropagation(); onDetail && onDetail(rfq) }}
                         className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors" title="View Details">
                         <Eye size={15} />
@@ -2705,6 +3066,7 @@ export default function RFQ() {
   const [activeTab, setActiveTab]         = useState('request')
   const [activeModal, setActiveModal]     = useState(null)
   const [deleteTarget, setDeleteTarget]   = useState(null)
+  const [rejectTarget, setRejectTarget]   = useState(null) // rfq to reject
 
   const openModal  = (type, rfq = null) => setActiveModal({ type, rfqId: rfq?.id ?? null })
   const closeModal = () => setActiveModal(null)
@@ -2730,7 +3092,7 @@ export default function RFQ() {
   const isPpeleadOnly = userRoles.length > 0 && userRoles.every(r => r === 'ppeLead')
 
   // Requestor role: show only their own RFQs
-  const isRequestorOnly = userRoles.length > 0 && userRoles.every(r => r === 'Requestor')
+  const isRequestorOnly = currentRole === 'Requestor'
   const visibleRfqs = isRequestorOnly
     ? rfqs.filter(r =>
         (firebaseUser && r.submittedByUid === firebaseUser.uid) ||
@@ -2968,6 +3330,51 @@ export default function RFQ() {
                     <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 text-[10px] font-bold">{pendingMHRfqs.length} pending</span>
                   )}
                 </div>
+
+                {/* ── Cost Estimate Rejected Alert ── */}
+                {pendingMHRfqs.some(r => r.costRejected) && (
+                  <div className="mb-3 bg-red-50 border-2 border-red-300 rounded-xl p-4 space-y-3">
+                    <div className="flex items-center gap-2">
+                      <div className="w-7 h-7 rounded-full bg-red-100 border border-red-300 flex items-center justify-center flex-shrink-0">
+                        <AlertTriangle size={14} className="text-red-600" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-bold text-red-700">
+                          Cost Estimate ถูก Reject — ต้องแก้ไข Manhour Plan และส่งใหม่
+                        </p>
+                        <p className="text-xs text-red-500 mt-0.5">
+                          {pendingMHRfqs.filter(r => r.costRejected).length} รายการถูกส่งกลับจาก PPE Manager กรุณาแก้ไขแล้วกด "Plan MH" เพื่อแก้ไขและส่งใหม่
+                        </p>
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      {pendingMHRfqs.filter(r => r.costRejected).map(rfq => (
+                        <div key={rfq.id} className="bg-white border border-red-200 rounded-lg px-3 py-2.5 flex items-start justify-between gap-3">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-xs font-bold text-red-700">{rfq.requestWorkNo}</span>
+                              <span className="text-[10px] text-red-400">Rejected: {rfq.costRejectedAt || '—'}</span>
+                            </div>
+                            {rfq.costRejectNote && (
+                              <p className="text-xs text-slate-600 mt-1 leading-relaxed line-clamp-2">
+                                <span className="font-semibold text-red-600">เหตุผล:</span> {rfq.costRejectNote}
+                              </p>
+                            )}
+                          </div>
+                          {canPlanMH && (
+                            <button
+                              onClick={() => openModal('stage2', rfq)}
+                              className="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors"
+                            >
+                              <RotateCcw size={12} /> แก้ไข & ส่งใหม่
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 <RFQTable
                   rows={pendingMHRfqs}
                   role={currentRole}
@@ -3245,6 +3652,14 @@ export default function RFQ() {
                   console.error('Failed to submit MH Plan:', err)
                   window.alert(`Submit Manhour Plan ไม่สำเร็จ (${err?.code || err?.message || 'unknown'})`)
                 }
+              }}
+              onSaveDraft={async (data) => {
+                try {
+                  await updateRfq(liveRfq.id, data)
+                } catch (err) {
+                  console.error('Failed to save MH Plan draft:', err)
+                  window.alert(`บันทึก Draft Manhour Plan ไม่สำเร็จ (${err?.code || err?.message || 'unknown'})`)
+                }
               }} />
           </>
         )}
@@ -3282,7 +3697,24 @@ export default function RFQ() {
                   console.error('Failed to cancel RFQ:', err)
                   window.alert(`Cancel RFQ ไม่สำเร็จ (${err?.code || err?.message || 'unknown'})`)
                 }
-              }} />
+              }}
+              onReject={canCostEst ? async (reason) => {
+                try {
+                  await updateRfq(liveRfq.id, {
+                    status: 'Pending MH',
+                    costRejected: true,
+                    costRejectNote: reason,
+                    costRejectedAt: new Date().toISOString().split('T')[0],
+                    costComments: [
+                      ...(liveRfq.costComments || []),
+                      { role: 'ppeManager', date: new Date().toISOString().split('T')[0], note: `[REJECTED] ${reason}` },
+                    ],
+                  })
+                } catch (err) {
+                  console.error('Failed to reject Cost Estimate:', err)
+                  window.alert(`Reject Cost Estimate ไม่สำเร็จ (${err?.code || err?.message || 'unknown'})`)
+                }
+              } : undefined} />
           </>
         )}
       </Modal>
@@ -3293,7 +3725,7 @@ export default function RFQ() {
         {liveRfq && (
           <>
             <div className="px-6 pt-5"><Stepper status={liveRfq.status} /></div>
-            <Stage4Form key={liveRfq.id} rfq={liveRfq} onClose={closeModal}
+            <Stage4Form key={liveRfq.id} rfq={liveRfq} role={currentRole} onClose={closeModal}
               onSave={async (data) => {
                 try {
                   await updateRfq(liveRfq.id, data)
@@ -3322,6 +3754,32 @@ export default function RFQ() {
         message={`Are you sure you want to delete RFQ "${deleteTarget?.requestWorkNo}"? This action cannot be undone.`}
         confirmLabel="Delete"
         confirmClass="bg-red-600 hover:bg-red-700 text-white"
+      />
+
+      {/* Reject Cost Estimate Modal */}
+      <RejectCostModal
+        isOpen={!!rejectTarget}
+        rfq={rejectTarget}
+        onClose={() => setRejectTarget(null)}
+        onConfirm={async (reason) => {
+          if (!rejectTarget) return
+          try {
+            await updateRfq(rejectTarget.id, {
+              status: 'Pending MH',
+              costRejected: true,
+              costRejectNote: reason,
+              costRejectedAt: new Date().toISOString().split('T')[0],
+              costComments: [
+                ...(rejectTarget.costComments || []),
+                { role: 'ppeManager', date: new Date().toISOString().split('T')[0], note: `[REJECTED] ${reason}` },
+              ],
+            })
+            setRejectTarget(null)
+          } catch (err) {
+            console.error('Failed to reject Cost Estimate:', err)
+            window.alert(`Reject Cost Estimate ไม่สำเร็จ (${err?.code || err?.message || 'unknown'})`)
+          }
+        }}
       />
     </div>
   )
